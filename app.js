@@ -1,0 +1,501 @@
+/* ===== Aplikasi Wali Santri - Roudhotul Qur'an ===== */
+/* Read-only, ambil data LANGSUNG dari Supabase (database bersama dengan
+   Aplikasi Pondok/Keuangan/Toko) lewat 1 fungsi RPC `data_wali_santri`.
+   Tidak pakai IndexedDB/antrean offline karena app ini tidak pernah menulis
+   data. Akses per santri dikunci dengan No. Induk + Kode Wali (2 faktor,
+   supaya wali lain yang cuma tahu No. Induk anak Anda tidak bisa ikut
+   melihat data anak Anda) -- lihat supabase-wali-santri-akses.sql. */
+
+/* PERBAIKAN (25 Agu 2026): sebelumnya menunjuk ke project 'ujtkwznrvzqktislrgpc', BEDA dari
+   project yang dipakai Aplikasi Pondok/Pembina/Toko ('hvivddbhacoppkbtiqpe'), padahal komentar
+   di atas bilang harusnya database bersama. Sudah diarahkan ke project yang benar (fungsi
+   data_wali_santri sudah dikonfirmasi ada di sana). PENTING: kalau project lama itu ternyata
+   masih menyimpan data produksi asli, pastikan datanya sudah dipindah dulu sebelum pakai file ini. */
+const SUPABASE_URL = 'https://hvivddbhacoppkbtiqpe.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_BTFxSTrt1vM1seoQaXG_7g_mqYo5aqq';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+/* Mengubah karakter khusus HTML (<, >, &, ", ') jadi bentuk aman sebelum
+   ditampilkan, supaya teks bebas-ketik dari pengguna lain (mis. keterangan
+   transaksi keuangan yang diisi bendahara) tidak bisa dieksekusi sebagai
+   kode HTML/JS saat dirender lewat innerHTML di app ini. */
+function escapeHtml(str){
+  if(str===null || str===undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Ubah snake_case (dari Postgres/Supabase) jadi camelCase (dipakai di seluruh app.js ini).
+function keCamel(s){ return s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase()); }
+function dalamCamel(obj){
+  if(Array.isArray(obj)) return obj.map(dalamCamel);
+  if(obj && typeof obj === 'object'){
+    const out = {};
+    for(const k in obj) out[keCamel(k)] = dalamCamel(obj[k]);
+    return out;
+  }
+  return obj;
+}
+
+const CACHE_KEY = 'wali_cache_v1'; // cadangan tampilan terakhir saja (bukan sumber data utama), supaya tetap bisa dilihat sebentar walau lagi tidak ada internet
+function simpanCache(db){ try{ localStorage.setItem(CACHE_KEY, JSON.stringify(db)); }catch(e){} }
+function ambilCache(){ try{ return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); }catch(e){ return null; } }
+
+let DB = { santri: [], mahram: [], kegiatan: [], absensi: [], hafalan: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [] };
+let ME = JSON.parse(sessionStorage.getItem('wali_session') || 'null'); // {noInduk, kodeWali} -- hanya untuk sesi berjalan, tidak dicadangkan ke localStorage
+
+const NAV = [
+  {id:'beranda', label:'Beranda', icon:'&#8962;'},
+  {id:'info', label:'Info', icon:'&#128100;'},
+  {id:'saldo', label:'Saldo', icon:'&#128176;'},
+  {id:'riwayat', label:'Riwayat', icon:'&#128203;'},
+  {id:'absensi', label:'Absensi', icon:'&#10003;'},
+  {id:'hafalan', label:'Hafalan', icon:'&#128214;'},
+  {id:'tagihan', label:'Tagihan', icon:'&#128179;'}
+];
+let currentPage='beranda';
+
+function val(id){ return document.getElementById(id).value; }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function rupiah(n){ return 'Rp ' + (n||0).toLocaleString('id-ID'); }
+function totalHalaman(h){ return (h.juz-1)*20 + h.halaman; }
+
+/* ---------- LOGIN (No. Induk + Kode Wali, lewat RPC) ---------- */
+function initLogin(){
+  if(ME){ muatDataWali(ME.noInduk, ME.kodeWali, true); }
+}
+async function doLogin(){
+  const noInduk = val('loginNoInduk').trim();
+  const kodeWali = val('loginKodeWali').trim();
+  const msg = document.getElementById('loginMsg');
+  if(!noInduk || !kodeWali){ msg.textContent = 'No. Induk dan Kode Wali wajib diisi.'; return; }
+  msg.textContent = 'Memuat data...';
+  const ok = await muatDataWali(noInduk, kodeWali, false);
+  if(ok){
+    ME = { noInduk, kodeWali };
+    sessionStorage.setItem('wali_session', JSON.stringify(ME));
+    msg.textContent = '';
+    enterApp();
+  } else {
+    msg.textContent = 'No. Induk / Kode Wali salah, atau sedang tidak ada internet.';
+  }
+}
+// Ambil data lewat RPC. Kalau offline dan sebelumnya pernah berhasil login (ME ada),
+// pakai cadangan terakhir supaya tetap bisa dilihat -- tapi TIDAK bisa dipakai untuk
+// login pertama kali (harus online dulu sekali untuk diverifikasi server).
+async function muatDataWali(noInduk, kodeWali, izinkanCache){
+  try{
+    const { data, error } = await sb.rpc('data_wali_santri', { p_no_induk: noInduk, p_kode_wali: kodeWali });
+    if(error || !data){
+      if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
+      return false;
+    }
+    const hasil = dalamCamel(data);
+    DB = {
+      santri: [hasil.santri],
+      mahram: hasil.mahram || [],
+      kegiatan: hasil.kegiatan || [],
+      absensi: hasil.absensi || [],
+      hafalan: hasil.hafalan || [],
+      transaksiSaldo: hasil.transaksiSaldo || [],
+      transaksiToko: hasil.transaksiToko || [],
+      tagihan: hasil.tagihan || [],
+      jenisTagihan: hasil.jenisTagihan || [],
+      iuranDetail: hasil.iuranDetail || []
+    };
+    // saldo santri = total transaksi_saldo, dihitung persis sama seperti Aplikasi Keuangan
+    // (jenis 'setoran' menambah, 'tarik'/'bayar' mengurangi -- lihat saldo_santri view).
+    DB.santri[0].saldo = DB.transaksiSaldo.reduce((sum,t)=> sum + (t.jenis==='setoran' ? t.jumlah : -t.jumlah), 0);
+    simpanCache(DB);
+    return true;
+  }catch(e){
+    if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
+    return false;
+  }
+}
+/* ---------- TOGGLE LIHAT ISIAN (No. Induk / Kode Wali) ---------- */
+function toggleLihat(inputId, btnId){
+  const el = document.getElementById(inputId);
+  const btn = document.getElementById(btnId);
+  const sedangTersembunyi = el.type === 'password';
+  el.type = sedangTersembunyi ? 'text' : 'password';
+  btn.textContent = sedangTersembunyi ? 'Sembunyi' : 'Lihat';
+}
+
+/* ---------- SCAN KARTU WALI (kamera hp, autofocus + senter/torch) ---------- */
+let html5QrCode = null;
+let torchNyala = false;
+
+async function bukaScanner(){
+  document.getElementById('scannerModal').style.display = 'flex';
+  document.getElementById('scanMsg').textContent = 'Membuka kamera...';
+  document.getElementById('torchBtn').style.display = 'none';
+  document.getElementById('torchBtn').classList.remove('on');
+  torchNyala = false;
+  try{
+    html5QrCode = new Html5Qrcode('qrReader');
+    const config = {
+      fps: 10,
+      qrbox: { width: 240, height: 240 },
+      // minta kamera belakang + autofokus berkelanjutan (didukung sebagian besar hp Android/iOS terbaru,
+      // kalau tidak didukung browser akan mengabaikannya begitu saja tanpa error)
+      videoConstraints: {
+        facingMode: { ideal: 'environment' },
+        advanced: [{ focusMode: 'continuous' }]
+      }
+    };
+    await html5QrCode.start(
+      { facingMode: 'environment' },
+      config,
+      onScanBerhasil,
+      () => {} // gagal baca di 1 frame itu wajar (belum ketemu QR), abaikan saja
+    );
+    document.getElementById('scanMsg').textContent = 'Arahkan kamera ke kode QR pada kartu wali.';
+    setTimeout(cekDukunganTorch, 600);
+  }catch(e){
+    document.getElementById('scanMsg').textContent = 'Tidak bisa mengakses kamera. Pastikan izin kamera untuk situs ini diaktifkan.';
+  }
+}
+function cekDukunganTorch(){
+  try{
+    const cap = html5QrCode.getRunningTrackCameraCapabilities();
+    const torch = cap && cap.torchFeature && cap.torchFeature();
+    if(torch && torch.isSupported && torch.isSupported()){
+      document.getElementById('torchBtn').style.display = 'inline-block';
+    }
+  }catch(e){}
+}
+async function toggleTorch(){
+  try{
+    const cap = html5QrCode.getRunningTrackCameraCapabilities();
+    const torch = cap.torchFeature();
+    torchNyala = !torchNyala;
+    await torch.apply(torchNyala);
+    document.getElementById('torchBtn').classList.toggle('on', torchNyala);
+  }catch(e){}
+}
+function onScanBerhasil(teks){
+  const parsed = uraiKodeKartuWali(teks);
+  tutupScanner();
+  if(parsed){
+    document.getElementById('loginNoInduk').value = parsed.noInduk;
+    document.getElementById('loginKodeWali').value = parsed.kodeWali;
+    doLogin();
+  } else {
+    document.getElementById('loginMsg').textContent = 'Kode QR pada kartu tidak dikenali formatnya.';
+  }
+}
+// Kartu wali diharapkan berisi No. Induk + Kode Wali dalam 1 kode QR, baik berupa
+// JSON {"noInduk":"...","kodeWali":"..."} maupun teks dipisah salah satu dari | : ; ,
+function uraiKodeKartuWali(teks){
+  teks = (teks || '').trim();
+  try{
+    const o = JSON.parse(teks);
+    const ni = o && (o.noInduk || o.no_induk);
+    const kw = o && (o.kodeWali || o.kode_wali);
+    if(ni && kw) return { noInduk: String(ni), kodeWali: String(kw) };
+  }catch(e){}
+  for(const pemisah of ['|', ':', ';', ',']){
+    if(teks.includes(pemisah)){
+      const [a, b] = teks.split(pemisah);
+      if(a && b) return { noInduk: a.trim(), kodeWali: b.trim() };
+    }
+  }
+  return null;
+}
+async function tutupScanner(){
+  document.getElementById('scannerModal').style.display = 'none';
+  if(html5QrCode){
+    try{ await html5QrCode.stop(); html5QrCode.clear(); }catch(e){}
+    html5QrCode = null;
+  }
+}
+
+function logout(){
+  sessionStorage.removeItem('wali_session');
+  ME = null;
+  document.getElementById('app').style.display='none';
+  document.getElementById('loginScreen').style.display='flex';
+}
+function mySantri(){ return DB.santri[0]; }
+function enterApp(){
+  document.getElementById('loginScreen').style.display='none';
+  document.getElementById('app').style.display='block';
+  document.getElementById('anakLabel').textContent = mySantri()?.nama || 'Wali Santri';
+  renderNav();
+  goPage('beranda');
+}
+
+/* ---------- NAV ---------- */
+function renderNav(){
+  const html = NAV.map(i=>`<button class="navitem" data-p="${i.id}" onclick="goPage('${i.id}')"><span class="ic">${i.icon}</span><span>${i.label}</span></button>`).join('');
+  document.getElementById('bottomnav').innerHTML = html;
+  document.getElementById('sidebar').innerHTML = html;
+}
+function goPage(p){
+  currentPage=p;
+  document.querySelectorAll('.navitem').forEach(el=>el.classList.toggle('active', el.dataset.p===p));
+  if(p==='beranda') renderBeranda();
+  if(p==='info') renderInfo();
+  if(p==='saldo') renderSaldo();
+  if(p==='riwayat') renderRiwayat();
+  if(p==='absensi') renderAbsensi();
+  if(p==='hafalan') renderHafalan();
+  if(p==='tagihan') renderTagihan();
+}
+function bulanIni(){ return new Date().toISOString().slice(0,7); }
+
+/* ---------- FILTER PERIODE (Hari ini / Pekan / Bulan / Tahun) ---------- */
+const LABEL_PERIODE = { hari:'Hari ini', pekan:'Pekan ini', bulan:'Bulan ini', tahun:'Tahun ini' };
+function rentangPeriode(mode){
+  const now = new Date();
+  const hariIni = todayStr();
+  let dari;
+  if(mode==='hari'){
+    dari = new Date(now);
+  } else if(mode==='pekan'){
+    dari = new Date(now);
+    const dow = (dari.getDay()+6)%7; // Senin=0 ... Minggu=6
+    dari.setDate(dari.getDate()-dow);
+  } else if(mode==='tahun'){
+    dari = new Date(now.getFullYear(), 0, 1);
+  } else { // 'bulan' (default)
+    dari = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  return { dari: dari.toISOString().slice(0,10), sampai: hariIni };
+}
+function tabsPeriode(mode, fnSet){
+  return `<div class="tabs">${Object.keys(LABEL_PERIODE).map(m=>
+    `<button class="tab ${mode===m?'active':''}" onclick="${fnSet}('${m}')">${LABEL_PERIODE[m]}</button>`
+  ).join('')}</div>`;
+}
+
+/* ---------- BERANDA ---------- */
+function renderBeranda(){
+  const s = mySantri();
+  const lastHafalan = DB.hafalan.filter(h=>h.santriId===s.id).sort((a,b)=>b.tanggal.localeCompare(a.tanggal))[0];
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="text-align:center">
+      ${s.foto?`<img src="${s.foto}" style="width:80px;height:80px;border-radius:50%;object-fit:cover">`:`<div class="avatar" style="width:80px;height:80px;font-size:24px;margin:0 auto">${escapeHtml((s.nama||'?').slice(0,2).toUpperCase())}</div>`}
+      <h2 style="margin-top:10px">${escapeHtml(s.nama)}</h2>
+      <p class="muted">No. induk ${escapeHtml(s.noInduk)} &middot; ${escapeHtml(s.kelas)||'-'}</p>
+      <span class="tag ${s.program==='Takhossus'?'tag-takhossus':'tag-nontakhossus'}">${escapeHtml(s.program)||'-'}</span>
+    </div>
+    <div class="grid2">
+      <div class="stat"><div class="num">${rupiah(s.saldo)}</div><div class="label">Saldo saat ini</div></div>
+      <div class="stat"><div class="num">${lastHafalan?`J${lastHafalan.juz} H${lastHafalan.halaman}`:'-'}</div><div class="label">Hafalan terakhir</div></div>
+    </div>
+    <p class="muted" style="margin-top:10px">Data ini hasil sinkron terakhir. Untuk data terbaru, minta admin melakukan sinkron ulang.</p>
+  `;
+}
+
+/* ---------- INFO ---------- */
+function renderInfo(){
+  const s = mySantri();
+  document.getElementById('content').innerHTML = `
+    <h2>Informasi Santri</h2>
+    <div class="card">
+      <table>
+        <tr><th>Nama</th><td>${escapeHtml(s.nama)}</td></tr>
+        <tr><th>No. Induk</th><td>${escapeHtml(s.noInduk)}</td></tr>
+        <tr><th>Tetala</th><td>${escapeHtml(s.tetala)||'-'}</td></tr>
+        <tr><th>Alamat</th><td>${escapeHtml(s.alamat)||'-'}</td></tr>
+        <tr><th>Tanggal masuk</th><td>${s.tglMasuk||'-'}</td></tr>
+        <tr><th>Kelas</th><td>${escapeHtml(s.kelas)||'-'}</td></tr>
+        <tr><th>Kamar</th><td>${escapeHtml(s.kamar)||'-'}</td></tr>
+        <tr><th>Program</th><td>${escapeHtml(s.program)||'-'}</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">Mahram</div>
+      ${(s.mahram||[]).length===0?'<p class="muted">Belum ada data.</p>':s.mahram.map(m=>`
+        <div class="list-item">
+          ${m.foto?`<img class="avatar" src="${m.foto}">`:`<div class="avatar">${escapeHtml((m.nama||'?').slice(0,2).toUpperCase())}</div>`}
+          <div><div class="name">${escapeHtml(m.nama)}</div><div class="sub">${escapeHtml(m.hubungan)} &middot; ${escapeHtml(m.hp)}</div></div>
+        </div>`).join('')}
+    </div>
+  `;
+}
+
+/* ---------- SALDO ---------- */
+function renderSaldo(){
+  const s = mySantri();
+  document.getElementById('content').innerHTML = `
+    <h2>Saldo</h2>
+    <div class="card stat" style="text-align:center">
+      <div class="num" style="font-size:28px">${rupiah(s.saldo)}</div>
+      <div class="label">Saldo saat ini</div>
+    </div>
+  `;
+}
+
+/* ---------- RIWAYAT ---------- */
+let riwFrom='', riwTo=todayStr();
+function renderRiwayat(){
+  if(!riwFrom){ const d=new Date(); d.setDate(d.getDate()-30); riwFrom=d.toISOString().slice(0,10); }
+  const s = mySantri();
+  const labelJenis = {setoran:'Setoran', tarik:'Tarik Tunai', bayar:'Bayar (saldo)'};
+  const sd = DB.transaksiSaldo.filter(t=>t.santriId===s.id && t.tanggal>=riwFrom && t.tanggal<=riwTo)
+    .map(t=>({tanggal:t.tanggal, jenis:labelJenis[t.jenis]||t.jenis, jumlah:t.jenis==='setoran'?t.jumlah:-t.jumlah, ket:t.keterangan}));
+  const iu = DB.iuranDetail.filter(it=>it.tanggal>=riwFrom && it.tanggal<=riwTo && it.status==='lunas')
+    .map(it=>({tanggal:it.tglBayar||it.tanggal, jenis:'Iuran', jumlah:-it.jumlah, ket:it.keterangan}));
+  const all = [...sd, ...iu].sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+  const belanja = DB.transaksiToko.filter(t=>t.santriId===s.id && (t.createdAt||'').slice(0,10)>=riwFrom && (t.createdAt||'').slice(0,10)<=riwTo)
+    .sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  document.getElementById('content').innerHTML = `
+    <h2>Riwayat Transaksi</h2>
+    <div class="card grid2">
+      <div><label>Dari tanggal</label><input type="date" value="${riwFrom}" onchange="riwFrom=this.value; renderRiwayat()"></div>
+      <div><label>Sampai tanggal</label><input type="date" value="${riwTo}" onchange="riwTo=this.value; renderRiwayat()"></div>
+    </div>
+    <div class="card">
+      ${all.length===0?'<p class="muted">Tidak ada transaksi pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Jenis</th><th>Keterangan</th><th>Nominal</th></tr>
+      ${all.map(t=>`<tr><td>${t.tanggal}</td><td>${t.jenis}</td><td>${escapeHtml(t.ket)||'-'}</td><td style="color:${t.jumlah<0?'#c0392b':'#2f7d4f'}">${t.jumlah<0?'-':'+'}${rupiah(Math.abs(t.jumlah))}</td></tr>`).join('')}</table>`}
+    </div>
+    <div class="card">
+      <div class="card-title">Belanja di Toko</div>
+      ${belanja.length===0?'<p class="muted">Belum ada transaksi belanja di Toko pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Item</th><th>Total</th><th>Metode</th><th>Status</th></tr>
+      ${belanja.map(t=>`<tr><td>${(t.createdAt||'').slice(0,10)}</td><td>${(t.items||[]).map(i=>`${escapeHtml(i.nama_produk||i.namaProduk)} x${i.qty}`).join(', ')||'-'}</td><td>${rupiah(t.total)}</td><td>${escapeHtml(t.metode)}</td><td>${t.statusBayar==='lunas'?'Lunas':'Hutang'}</td></tr>`).join('')}</table>`}
+    </div>
+  `;
+}
+
+/* ---------- ABSENSI ---------- */
+let absMode='bulan', absFrom='', absTo=todayStr();
+function setAbsPeriode(mode){ absMode=mode; const r=rentangPeriode(mode); absFrom=r.dari; absTo=r.sampai; renderAbsensi(); }
+function renderAbsensi(){
+  if(!absFrom){ const r=rentangPeriode(absMode); absFrom=r.dari; absTo=r.sampai; }
+  const s = mySantri();
+  const items = DB.absensi.filter(a=>a.santriId===s.id && a.tanggal>=absFrom && a.tanggal<=absTo);
+  const byKegiatan = {};
+  items.forEach(a=>{ byKegiatan[a.kegiatanId] = byKegiatan[a.kegiatanId]||[]; byKegiatan[a.kegiatanId].push(a); });
+  document.getElementById('content').innerHTML = `
+    <h2>Absensi</h2>
+    ${tabsPeriode(absMode, 'setAbsPeriode')}
+    <div class="card grid2">
+      <div><label>Dari tanggal</label><input type="date" value="${absFrom}" onchange="absFrom=this.value; absMode=''; renderAbsensi()"></div>
+      <div><label>Sampai tanggal</label><input type="date" value="${absTo}" onchange="absTo=this.value; absMode=''; renderAbsensi()"></div>
+    </div>
+    <div class="card">
+      ${Object.keys(byKegiatan).length===0?'<p class="muted">Belum ada data absensi pada periode ini.</p>':Object.keys(byKegiatan).map(kid=>{
+        const kg = DB.kegiatan.find(k=>k.id===kid);
+        const arr = byKegiatan[kid];
+        const hadir = arr.filter(a=>a.status==='h').length;
+        const pct = Math.round(hadir/arr.length*100);
+        const predikat = pct>=90?'Sangat baik':pct>=75?'Baik':pct>=50?'Cukup':'Perlu perhatian';
+        return `<div class="list-item"><div style="flex:1"><div class="name">${kg?escapeHtml(kg.nama):'-'}</div><div class="sub">${hadir}/${arr.length} hadir</div></div><span class="tag tag-nontakhossus">${pct}% - ${predikat}</span></div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+/* ---------- HAFALAN ---------- */
+let hfMode='bulan', hfFrom='', hfTo=todayStr();
+function setHfPeriode(mode){ hfMode=mode; const r=rentangPeriode(mode); hfFrom=r.dari; hfTo=r.sampai; renderHafalan(); }
+function renderHafalan(){
+  if(!hfFrom){ const r=rentangPeriode(hfMode); hfFrom=r.dari; hfTo=r.sampai; }
+  const s = mySantri();
+  const items = DB.hafalan.filter(h=>h.santriId===s.id && h.tanggal>=hfFrom && h.tanggal<=hfTo).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+  const tambah = items.length>=2 ? totalHalaman(items[items.length-1])-totalHalaman(items[0]) : 0;
+  document.getElementById('content').innerHTML = `
+    <h2>Hafalan</h2>
+    ${tabsPeriode(hfMode, 'setHfPeriode')}
+    <div class="card grid2">
+      <div><label>Dari tanggal</label><input type="date" value="${hfFrom}" onchange="hfFrom=this.value; hfMode=''; renderHafalan()"></div>
+      <div><label>Sampai tanggal</label><input type="date" value="${hfTo}" onchange="hfTo=this.value; hfMode=''; renderHafalan()"></div>
+    </div>
+    <div class="card stat"><div class="num">${tambah}</div><div class="label">Tambahan halaman pada periode ini</div></div>
+    <div class="card">
+      <div class="card-title">Grafik tren</div>
+      <canvas id="chartHafalan" width="600" height="200" style="width:100%;height:170px"></canvas>
+    </div>
+    <div class="card">
+      <div class="card-title">Riwayat input</div>
+      ${items.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Juz</th><th>Halaman</th></tr>${items.slice().reverse().map(h=>`<tr><td>${h.tanggal}</td><td>${h.juz}</td><td>${h.halaman}</td></tr>`).join('')}</table>`}
+    </div>
+  `;
+  drawTrend(items);
+}
+function drawTrend(items){
+  const canvas = document.getElementById('chartHafalan');
+  const ctx = canvas.getContext('2d');
+  const W=canvas.width, H=canvas.height, pad=30;
+  ctx.clearRect(0,0,W,H);
+  if(items.length<2){ ctx.fillStyle='#888'; ctx.font='13px sans-serif'; ctx.fillText('Belum cukup data untuk grafik tren.',10,H/2); return; }
+  const vals = items.map(totalHalaman);
+  const maxV = Math.max(1,...vals);
+  ctx.strokeStyle='#ddd'; ctx.beginPath(); ctx.moveTo(pad,H-pad); ctx.lineTo(W-10,H-pad); ctx.stroke();
+  ctx.strokeStyle='#3b5940'; ctx.beginPath();
+  items.forEach((h,i)=>{
+    const x = pad + (i/(items.length-1))*(W-pad-20);
+    const y = H-pad - (totalHalaman(h)/maxV)*(H-pad-20);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+}
+
+/* ---------- TAGIHAN & IURAN (BULAN INI) ---------- */
+function renderTagihan(){
+  const s = mySantri();
+  const bln = bulanIni();
+  const namaBulan = new Date(bln+'-01').toLocaleDateString('id-ID',{month:'long', year:'numeric'});
+
+  // Tagihan (SPP, dsb) milik santri ini pada bulan berjalan
+  const tagihanBln = DB.tagihan.filter(t=>t.santriId===s.id && t.bulan===bln).map(t=>{
+    const jenis = DB.jenisTagihan.find(j=>j.id===t.jenisTagihanId);
+    return { nama: jenis?jenis.nama:'Tagihan', jumlah:t.jumlah, status:t.status, tglBayar:t.tglBayar };
+  });
+
+  // Iuran (insidental) milik santri ini, jatuh di bulan berjalan (dilihat dari tanggal iuran dibuat)
+  const iuranBln = DB.iuranDetail
+    .filter(it=>it.tanggal && it.tanggal.slice(0,7)===bln)
+    .map(it=>({ nama:'Iuran' + (it.keterangan?(': '+it.keterangan):''), jumlah:it.jumlah, status:it.status, tglBayar:it.tglBayar }));
+
+  const semua = [...tagihanBln, ...iuranBln];
+  const belum = semua.filter(r=>r.status==='belum');
+  const lunas = semua.filter(r=>r.status==='lunas');
+
+  document.getElementById('content').innerHTML = `
+    <h2>Tagihan &amp; Iuran</h2>
+    <p class="muted" style="margin-top:-6px">Periode ${namaBulan}</p>
+    ${semua.length===0?`<div class="card"><p class="muted">Tidak ada tagihan atau iuran untuk bulan ini.</p></div>`:`
+    <div class="card">
+      <div class="card-title">Belum bayar (${belum.length})</div>
+      ${belum.length===0?'<p class="muted">Semua tagihan bulan ini sudah lunas. &#127881;</p>':`<table><tr><th>Nama</th><th>Nominal</th><th>Status</th></tr>
+      ${belum.map(r=>`<tr><td>${escapeHtml(r.nama)}</td><td>${rupiah(r.jumlah)}</td><td><span class="tag tag-belum">Belum bayar</span></td></tr>`).join('')}</table>`}
+    </div>
+    <div class="card">
+      <div class="card-title">Sudah lunas (${lunas.length})</div>
+      ${lunas.length===0?'<p class="muted">Belum ada yang lunas bulan ini.</p>':`<table><tr><th>Nama</th><th>Nominal</th><th>Tgl. bayar</th><th>Status</th></tr>
+      ${lunas.map(r=>`<tr><td>${escapeHtml(r.nama)}</td><td>${rupiah(r.jumlah)}</td><td>${r.tglBayar||'-'}</td><td><span class="tag tag-lunas">Lunas</span></td></tr>`).join('')}</table>`}
+    </div>`}
+  `;
+}
+
+/* ---------- MUAT ULANG (tarik data terbaru dari Supabase) ---------- */
+async function muatUlang(){
+  if(!ME) return;
+  const ok = await muatDataWali(ME.noInduk, ME.kodeWali, false);
+  if(ok) goPage(currentPage);
+  else alert('Gagal memuat data terbaru. Cek koneksi internet.');
+}
+
+/* ---------- MODAL ---------- */
+function showModal(title, bodyHtml){
+  document.getElementById('modalRoot').innerHTML = `
+    <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
+      <div class="modal-box">
+        <div class="modal-head"><h3>${title}</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+        ${bodyHtml}
+      </div>
+    </div>
+  `;
+}
+function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
+
+/* ---------- INIT ---------- */
+initLogin();

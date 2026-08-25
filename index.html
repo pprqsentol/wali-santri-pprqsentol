@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Wali Santri - Roudhotul Qur'an</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#3b5940">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="loginScreen" class="screen">
+  <div class="login-box">
+    <img src="icon-192.png" class="login-logo" alt="Logo Pondok">
+    <h1>Wali Santri</h1>
+    <p class="muted">Roudhotul Qur'an</p>
+    <label>No. Induk santri (anak Anda)</label>
+    <div class="input-eye">
+      <input id="loginNoInduk" type="password" inputmode="numeric" autocomplete="off" placeholder="Contoh: 1001">
+      <button type="button" class="eye-btn" id="eyeNoInduk" onclick="toggleLihat('loginNoInduk','eyeNoInduk')">Lihat</button>
+    </div>
+    <label style="margin-top:10px">Kode Wali</label>
+    <div class="input-eye">
+      <input id="loginKodeWali" type="password" autocomplete="off" placeholder="Kode dari admin pondok">
+      <button type="button" class="eye-btn" id="eyeKodeWali" onclick="toggleLihat('loginKodeWali','eyeKodeWali')">Lihat</button>
+    </div>
+    <button class="btn-primary" onclick="doLogin()">Lihat data</button>
+    <button class="btn-scan" onclick="bukaScanner()">&#128247; Scan Kartu Wali</button>
+    <p class="muted" id="loginMsg" style="margin-top:10px"></p>
+    <p class="muted" style="margin-top:14px;font-size:12px">Kode Wali didapat dari admin pondok, terpisah dari No. Induk.</p>
+  </div>
+</div>
+
+<div id="scannerModal" class="modal-overlay" style="display:none">
+  <div class="modal-box scanner-box">
+    <div class="modal-head"><h3>Scan Kartu Wali</h3><button class="modal-close" onclick="tutupScanner()">&times;</button></div>
+    <div id="qrReader"></div>
+    <p class="muted" id="scanMsg" style="text-align:center;margin-top:8px">Membuka kamera...</p>
+    <div class="btn-row" style="justify-content:center">
+      <button class="btn" id="torchBtn" style="display:none" onclick="toggleTorch()">&#128161; Senter</button>
+      <button class="btn" onclick="tutupScanner()">Batal</button>
+    </div>
+  </div>
+</div>
+
+<div id="app" class="screen" style="display:none">
+  <header class="topbar">
+    <img src="icon-192.png" class="topbar-logo" alt="">
+    <div>
+      <div class="topbar-title" id="anakLabel">Wali Santri</div>
+      <div class="topbar-sub">Tampilan khusus (lihat saja)</div>
+    </div>
+    <button class="icon-btn" onclick="muatUlang()" title="Muat ulang data">&#8635;</button>
+    <button class="icon-btn" onclick="logout()" title="Keluar">&#8631;</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar"></nav>
+    <main class="content" id="content"></main>
+  </div>
+
+  <nav class="bottomnav" id="bottomnav"></nav>
+</div>
+
+<div id="modalRoot"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
+}
+</script>
+</body>
+</html>
