@@ -15,6 +15,55 @@ const SUPABASE_URL = 'https://hvivddbhacoppkbtiqpe.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BTFxSTrt1vM1seoQaXG_7g_mqYo5aqq';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+/* ====== PASANG APLIKASI (PWA) ======
+   Chrome/Edge di Android baru menawarkan pasang otomatis setelah kriteria
+   & "skor keterlibatan" browser terpenuhi (kadang butuh beberapa kali
+   kunjungan), jadi tombol "Pasang Aplikasi" ini dipasang manual supaya
+   pengguna bisa memasang kapan saja tanpa menunggu itu. iOS Safari malah
+   sama sekali tidak punya prompt otomatis -- di sana harus lewat menu
+   Bagikan, jadi tombolnya diarahkan ke instruksi manual. */
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  document.querySelectorAll('#btnInstallApp, #btnInstallAppTop').forEach(b=> b.style.display = '');
+});
+window.addEventListener('appinstalled', ()=>{
+  deferredInstallPrompt = null;
+  document.querySelectorAll('#btnInstallApp, #btnInstallAppTop').forEach(b=> b.style.display = 'none');
+});
+function isRunningAsInstalledPwa(){
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+function isIos(){
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+async function installApp(){
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    document.querySelectorAll('#btnInstallApp, #btnInstallAppTop').forEach(b=> b.style.display = 'none');
+    return;
+  }
+  if(isIos()){
+    alert('Cara pasang di iPhone/iPad:\n1. Ketuk ikon Bagikan (kotak dengan panah ke atas) di Safari.\n2. Pilih "Tambah ke Layar Utama".\n\nCatatan: harus dibuka lewat Safari, bukan Chrome, supaya opsi ini muncul.');
+    return;
+  }
+  alert('Kalau tombol "Pasang" tidak muncul sendiri: buka menu titik tiga di pojok browser lalu pilih "Instal aplikasi" / "Tambahkan ke layar utama". Pastikan juga aplikasi dibuka lewat alamat HTTPS.');
+}
+if(isRunningAsInstalledPwa()){
+  document.addEventListener('DOMContentLoaded', ()=>{
+    document.querySelectorAll('#btnInstallApp, #btnInstallAppTop').forEach(b=> b.style.display = 'none');
+  });
+} else if(isIos()){
+  /* iOS tidak pernah memicu beforeinstallprompt, jadi tombolnya
+     ditampilkan dari awal supaya pengguna iPhone tetap dapat instruksi. */
+  document.addEventListener('DOMContentLoaded', ()=>{
+    document.querySelectorAll('#btnInstallApp, #btnInstallAppTop').forEach(b=> b.style.display = '');
+  });
+}
+
 /* Mengubah karakter khusus HTML (<, >, &, ", ') jadi bentuk aman sebelum
    ditampilkan, supaya teks bebas-ketik dari pengguna lain (mis. keterangan
    transaksi keuangan yang diisi bendahara) tidak bisa dieksekusi sebagai
@@ -221,6 +270,16 @@ function logout(){
   document.getElementById('app').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
 }
+/* Ukur tinggi topbar sebenarnya lalu simpan ke CSS variable --topbar-h,
+   supaya .layout tetap menghitung tinggi sisa layar dengan akurat di
+   ukuran topbar berapa pun (topbar dibikin lebih ringkas saat landscape). */
+function syncTopbarHeight(){
+  const tb = document.querySelector('.topbar');
+  if(tb) document.documentElement.style.setProperty('--topbar-h', tb.offsetHeight + 'px');
+}
+window.addEventListener('resize', syncTopbarHeight);
+window.addEventListener('orientationchange', ()=> setTimeout(syncTopbarHeight, 300));
+
 function mySantri(){ return DB.santri[0]; }
 function enterApp(){
   document.getElementById('loginScreen').style.display='none';
@@ -228,6 +287,7 @@ function enterApp(){
   document.getElementById('anakLabel').textContent = mySantri()?.nama || 'Wali Santri';
   renderNav();
   goPage('beranda');
+  syncTopbarHeight();
 }
 
 /* ---------- NAV ---------- */

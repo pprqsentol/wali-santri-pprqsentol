@@ -29,6 +29,7 @@
     </div>
     <button class="btn-primary" onclick="doLogin()">Lihat data</button>
     <button class="btn-scan" onclick="bukaScanner()">&#128247; Scan Kartu Wali</button>
+    <button class="btn" id="btnInstallApp" style="display:none;width:100%;margin-top:10px" onclick="installApp()">&#8681; Pasang Aplikasi ke Layar Utama</button>
     <p class="muted" id="loginMsg" style="margin-top:10px"></p>
     <p class="muted" style="margin-top:14px;font-size:12px">Kode Wali didapat dari admin pondok, terpisah dari No. Induk.</p>
   </div>
@@ -53,6 +54,7 @@
       <div class="topbar-title" id="anakLabel">Wali Santri</div>
       <div class="topbar-sub">Tampilan khusus (lihat saja)</div>
     </div>
+    <button class="icon-btn" id="btnInstallAppTop" style="display:none" onclick="installApp()" title="Pasang Aplikasi">&#8681;</button>
     <button class="icon-btn" onclick="muatUlang()" title="Muat ulang data">&#8635;</button>
     <button class="icon-btn" onclick="logout()" title="Keluar">&#8631;</button>
   </header>
