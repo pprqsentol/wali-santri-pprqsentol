@@ -230,31 +230,43 @@ async function toggleTorch(){
 function onScanBerhasil(teks){
   const parsed = uraiKodeKartuWali(teks);
   tutupScanner();
-  if(parsed){
+  if(parsed && parsed.kodeWali){
+    // QR berisi No. Induk + Kode Wali lengkap -> langsung login
     document.getElementById('loginNoInduk').value = parsed.noInduk;
     document.getElementById('loginKodeWali').value = parsed.kodeWali;
     doLogin();
+  } else if(parsed && parsed.noInduk){
+    // QR hanya berisi No. Induk -> isikan No. Induk, minta wali ketik Kode Wali sendiri
+    document.getElementById('loginNoInduk').value = parsed.noInduk;
+    document.getElementById('loginKodeWali').value = '';
+    document.getElementById('loginMsg').textContent = 'No. Induk terisi dari QR. Silakan ketik Kode Wali, lalu tekan "Lihat data".';
+    document.getElementById('loginKodeWali').focus();
   } else {
     document.getElementById('loginMsg').textContent = 'Kode QR pada kartu tidak dikenali formatnya.';
   }
 }
-// Kartu wali diharapkan berisi No. Induk + Kode Wali dalam 1 kode QR, baik berupa
-// JSON {"noInduk":"...","kodeWali":"..."} maupun teks dipisah salah satu dari | : ; ,
+// Kartu wali bisa berisi salah satu dari:
+// 1) JSON {"noInduk":"...","kodeWali":"..."} (boleh kodeWali kosong/tidak ada)
+// 2) teks No.Induk + Kode Wali dipisah salah satu dari | : ; ,
+// 3) teks polos berisi No. Induk saja (tanpa Kode Wali), misalnya cuma "1001"
 function uraiKodeKartuWali(teks){
   teks = (teks || '').trim();
+  if(!teks) return null;
   try{
     const o = JSON.parse(teks);
     const ni = o && (o.noInduk || o.no_induk);
     const kw = o && (o.kodeWali || o.kode_wali);
-    if(ni && kw) return { noInduk: String(ni), kodeWali: String(kw) };
+    if(ni) return { noInduk: String(ni), kodeWali: kw ? String(kw) : null };
   }catch(e){}
   for(const pemisah of ['|', ':', ';', ',']){
     if(teks.includes(pemisah)){
       const [a, b] = teks.split(pemisah);
       if(a && b) return { noInduk: a.trim(), kodeWali: b.trim() };
+      if(a) return { noInduk: a.trim(), kodeWali: null };
     }
   }
-  return null;
+  // Tidak ada format JSON/pemisah yang cocok -> anggap seluruh isi QR adalah No. Induk polos
+  return { noInduk: teks, kodeWali: null };
 }
 async function tutupScanner(){
   document.getElementById('scannerModal').style.display = 'none';
@@ -291,10 +303,21 @@ function enterApp(){
 }
 
 /* ---------- NAV ---------- */
+// Ikon keluar dipakai sbg SVG (bukan karakter panah U+21B7 spt sebelumnya)
+// supaya tampil tajam & konsisten di semua HP, dan warnanya ikut currentColor
+// (ikut warna teks tombol) lewat stroke="currentColor".
+const LOGOUT_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>`;
+
 function renderNav(){
-  const html = NAV.map(i=>`<button class="navitem" data-p="${i.id}" onclick="goPage('${i.id}')"><span class="ic">${i.icon}</span><span>${i.label}</span></button>`).join('');
+  const html = NAV.map(i=>`<button class="navitem" data-p="${i.id}" onclick="goPage('${i.id}')"><span class="ic">${i.icon}</span><span>${i.label}</span></button>`).join('')
+    + `<button class="navitem navitem-logout" onclick="konfirmasiLogout()"><span class="ic">${LOGOUT_ICON}</span><span>Keluar</span></button>`;
   document.getElementById('bottomnav').innerHTML = html;
   document.getElementById('sidebar').innerHTML = html;
+}
+// Tab "Keluar" sekarang duduk di antara tab-tab lain, jadi dikasih konfirmasi
+// dulu supaya tidak ke-logout tanpa sengaja waktu jari meleset pas navigasi.
+function konfirmasiLogout(){
+  if(confirm('Keluar dari aplikasi ini?')) logout();
 }
 function goPage(p){
   currentPage=p;
@@ -498,51 +521,73 @@ function drawTrend(items){
   ctx.stroke();
 }
 
-/* ---------- TAGIHAN & IURAN (BULAN INI) ---------- */
+/* ---------- TAGIHAN & IURAN ---------- */
+// Label bulan dari string "YYYY-MM" (kalau ada), contoh "September 2026". Kalau tidak ada / gagal parse, kembalikan ''.
+function labelBulan(bln){
+  if(!bln) return '';
+  try{ return new Date(bln+'-01').toLocaleDateString('id-ID',{month:'long', year:'numeric'}); }
+  catch(e){ return ''; }
+}
 function renderTagihan(){
   const s = mySantri();
-  const bln = bulanIni();
-  const namaBulan = new Date(bln+'-01').toLocaleDateString('id-ID',{month:'long', year:'numeric'});
 
-  // Tagihan (SPP, dsb) milik santri ini pada bulan berjalan
-  const tagihanBln = DB.tagihan.filter(t=>t.santriId===s.id && t.bulan===bln).map(t=>{
+  // Semua tagihan (SPP, dsb) milik santri ini, apa pun bulannya -- supaya tidak ada
+  // yang "hilang" hanya karena sudah dibuat lebih awal untuk bulan mendatang.
+  const semuaTagihan = DB.tagihan.filter(t=>t.santriId===s.id).map(t=>{
     const jenis = DB.jenisTagihan.find(j=>j.id===t.jenisTagihanId);
-    return { nama: jenis?jenis.nama:'Tagihan', jumlah:t.jumlah, status:t.status, tglBayar:t.tglBayar };
+    const lbl = labelBulan(t.bulan);
+    return { nama: (jenis?jenis.nama:'Tagihan') + (lbl?` (${lbl})`:''), jumlah:t.jumlah, status:t.status, tglBayar:t.tglBayar, urut:t.bulan||'' };
   });
 
-  // Iuran (insidental) milik santri ini, jatuh di bulan berjalan (dilihat dari tanggal iuran dibuat)
-  const iuranBln = DB.iuranDetail
-    .filter(it=>it.tanggal && it.tanggal.slice(0,7)===bln)
-    .map(it=>({ nama:'Iuran' + (it.keterangan?(': '+it.keterangan):''), jumlah:it.jumlah, status:it.status, tglBayar:it.tglBayar }));
+  // Iuran (insidental) milik santri ini -- RPC sudah filter per santri, jadi ambil semua
+  const semuaIuran = DB.iuranDetail.map(it=>{
+    const lbl = it.tanggal ? labelBulan(it.tanggal.slice(0,7)) : '';
+    return { nama:'Iuran' + (it.keterangan?(': '+it.keterangan):'') + (lbl?` (${lbl})`:''), jumlah:it.jumlah, status:it.status, tglBayar:it.tglBayar, urut:it.tanggal||'' };
+  });
 
-  const semua = [...tagihanBln, ...iuranBln];
-  const belum = semua.filter(r=>r.status==='belum');
-  const lunas = semua.filter(r=>r.status==='lunas');
+  const semua = [...semuaTagihan, ...semuaIuran];
+  const belum = semua.filter(r=>r.status==='belum').sort((a,b)=>a.urut.localeCompare(b.urut));
+  const lunas = semua.filter(r=>r.status==='lunas').sort((a,b)=>b.urut.localeCompare(a.urut));
 
   document.getElementById('content').innerHTML = `
     <h2>Tagihan &amp; Iuran</h2>
-    <p class="muted" style="margin-top:-6px">Periode ${namaBulan}</p>
-    ${semua.length===0?`<div class="card"><p class="muted">Tidak ada tagihan atau iuran untuk bulan ini.</p></div>`:`
+    <p class="muted" style="margin-top:-6px">Semua tagihan &amp; iuran, apa pun periodenya</p>
+    ${semua.length===0?`<div class="card"><p class="muted">Tidak ada tagihan atau iuran.</p></div>`:`
     <div class="card">
       <div class="card-title">Belum bayar (${belum.length})</div>
-      ${belum.length===0?'<p class="muted">Semua tagihan bulan ini sudah lunas. &#127881;</p>':`<table><tr><th>Nama</th><th>Nominal</th><th>Status</th></tr>
+      ${belum.length===0?'<p class="muted">Semua tagihan sudah lunas. &#127881;</p>':`<table><tr><th>Nama</th><th>Nominal</th><th>Status</th></tr>
       ${belum.map(r=>`<tr><td>${escapeHtml(r.nama)}</td><td>${rupiah(r.jumlah)}</td><td><span class="tag tag-belum">Belum bayar</span></td></tr>`).join('')}</table>`}
     </div>
     <div class="card">
       <div class="card-title">Sudah lunas (${lunas.length})</div>
-      ${lunas.length===0?'<p class="muted">Belum ada yang lunas bulan ini.</p>':`<table><tr><th>Nama</th><th>Nominal</th><th>Tgl. bayar</th><th>Status</th></tr>
+      ${lunas.length===0?'<p class="muted">Belum ada yang lunas.</p>':`<table><tr><th>Nama</th><th>Nominal</th><th>Tgl. bayar</th><th>Status</th></tr>
       ${lunas.map(r=>`<tr><td>${escapeHtml(r.nama)}</td><td>${rupiah(r.jumlah)}</td><td>${r.tglBayar||'-'}</td><td><span class="tag tag-lunas">Lunas</span></td></tr>`).join('')}</table>`}
     </div>`}
   `;
 }
 
-/* ---------- MUAT ULANG (tarik data terbaru dari Supabase) ---------- */
+/* ---------- MUAT ULANG (tarik data terbaru dari Supabase) ----------
+   Sebelumnya lewat tombol di header. Sekarang header sudah dibersihkan
+   dari tombol, jadi diganti otomatis & senyap: setiap kali pengguna
+   kembali ke app ini (mis. balik dari app lain / kunci layar), data
+   ditarik ulang di belakang layar tanpa mengganggu tampilan. Dibatasi
+   jarak minimal 60 detik antar-refresh supaya tidak memanggil RPC
+   berkali-kali kalau pengguna gonta-ganti app dengan cepat. Kalau gagal
+   (mis. lagi tidak ada internet), dibiarkan saja -- data lama yang sudah
+   tampil tetap dipakai, tidak perlu mengganggu dengan alert. */
+let lastAutoRefresh = 0;
 async function muatUlang(){
-  if(!ME) return;
   const ok = await muatDataWali(ME.noInduk, ME.kodeWali, false);
   if(ok) goPage(currentPage);
-  else alert('Gagal memuat data terbaru. Cek koneksi internet.');
 }
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState!=='visible' || !ME) return;
+  if(document.getElementById('app').style.display==='none') return;
+  const now = Date.now();
+  if(now - lastAutoRefresh < 60000) return;
+  lastAutoRefresh = now;
+  muatUlang();
+});
 
 /* ---------- MODAL ---------- */
 function showModal(title, bodyHtml){

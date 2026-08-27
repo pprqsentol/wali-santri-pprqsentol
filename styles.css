@@ -4,8 +4,16 @@
   --danger:#a33; --radius:12px;
 }
 *{box-sizing:border-box;}
-body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
-.screen{min-height:100vh;}
+html{height:100%;overflow-x:hidden;}
+body{margin:0;min-height:100%;overflow-x:hidden;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
+/* min-height:100vh di sebagian browser mobile (terutama landscape) dihitung
+   dari tinggi viewport SAAT toolbar/address bar sedang tersembunyi. Begitu
+   toolbar muncul lagi (mis. waktu discroll ke atas), tinggi 100vh jadi tidak
+   akurat lagi dan elemen position:fixed di dalamnya bisa "salah tempat".
+   100dvh (dynamic viewport height) selalu mengikuti tinggi layar yang
+   benar-benar terlihat saat itu, jadi dipakai duluan sebagai fallback aman
+   kalau browser belum kenal dvh. */
+.screen{min-height:100vh;min-height:100dvh;}
 h1,h2,h3{font-weight:600;margin:0 0 4px;}
 .muted{color:var(--muted);font-size:13px;}
 button{cursor:pointer;font-family:inherit;}
@@ -37,7 +45,6 @@ button{cursor:pointer;font-family:inherit;}
 .topbar-logo{width:32px;height:32px;border-radius:50%;object-fit:cover;}
 .topbar-title{font-weight:600;font-size:15px;}
 .topbar-sub{font-size:12px;color:var(--muted);}
-.icon-btn{margin-left:auto;background:none;border:none;font-size:20px;color:var(--muted);padding:6px;}
 
 /* Mode landscape (HP dimiringkan, tinggi layar sempit): topbar dulunya
    judul & subjudulnya bertumpuk atas-bawah dan makan banyak tinggi layar.
@@ -54,26 +61,72 @@ button{cursor:pointer;font-family:inherit;}
   .bottomnav .navitem .ic{font-size:15px;}
 }
 
-.layout{display:flex;min-height:calc(100vh - var(--topbar-h, 53px));}
+.layout{display:flex;min-height:calc(100vh - var(--topbar-h, 53px));min-height:calc(100dvh - var(--topbar-h, 53px));}
 .sidebar{display:none;}
-.content{flex:1;padding:14px;padding-bottom:80px;max-width:960px;margin:0 auto;width:100%;}
+/* min-width:0 itu kuncinya: secara default elemen flex ("content" di sini)
+   tidak mau menyusut lebih kecil dari lebar aslinya, jadi kalau ada isi
+   lebar (misalnya tabel di dalam .card) tanpa min-width:0, bukan tabelnya
+   yang di-scroll sendiri (overflow-x:auto di .card) tapi seluruh baris
+   .layout (termasuk sidebar/navigasi di sebelah kiri) yang ikut melebar dan
+   ikut tergeser saat digeser ke kanan. Dengan min-width:0, .content dipaksa
+   menghormati lebar layar, dan scroll horizontal jadi kekunci di dalam
+   .card tempat tabelnya berada -- sidebar/navigasi di kiri jadi diam. */
+.content{flex:1;min-width:0;padding:14px;padding-bottom:24px;max-width:960px;margin:0 auto;width:100%;}
 
-/* Bottom nav (mobile). position:fixed ke viewport supaya diam di tempat --
-   tidak ikut bergeser saat konten di atasnya di-scroll. translateZ dipakai
-   supaya browser (terutama iOS Safari) tidak "menggeser" nav ini sesaat
-   saat momentum-scroll. */
-.bottomnav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);display:flex;z-index:10;transform:translateZ(0);}
+/* Bottom nav (mobile). Dulu pakai position:fixed supaya diam di tempat,
+   tapi position:fixed dihitung terhadap ukuran viewport yang "dibekukan"
+   saat itu -- di HP (apalagi landscape, karena tinggi layarnya sudah mepet
+   dan toolbar browser makan porsi lebih besar) begitu address bar
+   muncul/hilang saat discroll, posisi fixed itu jadi meleset dan nav bisa
+   tampak tergeser bahkan hilang di bawah layar.
+   position:sticky ke bawah lebih aman: dihitung langsung dari alur halaman
+   yang sesungguhnya (bukan ukuran viewport yang dibekukan), jadi nav selalu
+   nempel pas di tepi bawah layar yang sedang terlihat, baik portrait maupun
+   landscape, dan tidak pernah "kabur" saat toolbar browser muncul/hilang. */
+.bottomnav{position:sticky;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);display:flex;z-index:10;
+  /* HP dengan notch/gesture-bar: di landscape area aman biasanya ada di kiri/kanan,
+     tapi tetap beri padding-bottom aman untuk device yang taruhnya di bawah. */
+  padding-bottom:env(safe-area-inset-bottom, 0);
+  padding-left:env(safe-area-inset-left, 0);
+  padding-right:env(safe-area-inset-right, 0);
+}
 .bottomnav .navitem{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 2px;background:none;border:none;color:var(--muted);font-size:10px;}
 .bottomnav .navitem.active{color:var(--green-600);}
 .bottomnav .navitem .ic{font-size:18px;}
+.navitem .ic svg{display:block;}
+.bottomnav .navitem.navitem-logout{color:var(--danger);}
 
-/* Sidebar (desktop) */
+/* Sidebar (desktop / HP landscape yang lebar layarnya di atas 800px)
+   Dulu sidebar dibikin "position:sticky" supaya nempel diam sementara
+   .content di sebelahnya discroll. Masalahnya position:sticky itu
+   dihitung berdasarkan tinggi halaman (html/body) yang discroll --
+   di HP, terutama landscape, address bar browser yang muncul/hilang
+   saat discroll bikin tinggi viewport (dan max-height:100dvh milik
+   sidebar) berubah-ubah di tengah gerakan scroll, jadi sidebar sempat
+   "kebawa" ikut bergeser sebelum akhirnya nempel lagi -- kelihatan
+   seperti sidebar ikut tergeser walau harusnya diam.
+   Sekarang didesain ulang: .layout dikunci setinggi sisa layar
+   (topbar + layout = pas 100dvh, halaman/body sendiri TIDAK discroll
+   sama sekali), lalu HANYA .content yang punya scrollbar sendiri
+   (overflow-y:auto). Karena bukan halaman yang discroll, sidebar di
+   luar area scroll itu otomatis tidak akan pernah ikut bergeser --
+   bukan lagi soal "nempel tepat waktu" seperti sticky, tapi memang
+   sidebar dan area scroll konten adalah dua kotak terpisah. */
 @media (min-width:800px){
   .bottomnav{display:none;}
-  .sidebar{display:flex;flex-direction:column;width:190px;background:var(--card);border-right:1px solid var(--border);padding:14px 8px;gap:2px;}
+  .layout{
+    height:calc(100vh - var(--topbar-h, 53px));
+    height:calc(100dvh - var(--topbar-h, 53px));
+    overflow:hidden;
+  }
+  .sidebar{display:flex;flex-direction:column;width:190px;flex-shrink:0;background:var(--card);border-right:1px solid var(--border);padding:14px 8px;gap:2px;
+    height:100%;
+    overflow-y:auto;
+  }
   .sidebar .navitem{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;border:none;background:none;text-align:left;color:var(--text);font-size:14px;}
   .sidebar .navitem.active{background:var(--green-100);color:var(--green-700);font-weight:600;}
-  .content{padding:20px;}
+  .sidebar .navitem.navitem-logout{margin-top:auto;color:var(--danger);border-top:1px solid var(--border);border-radius:0;padding-top:14px;}
+  .content{padding:20px;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 }
 
 /* Cards / generic UI */
