@@ -1,21 +1,39 @@
 /* ===== Aplikasi Wali Santri - Roudhotul Qur'an ===== */
-/* Read-only, ambil data LANGSUNG dari Supabase (database bersama dengan
-   Aplikasi Pondok/Keuangan/Toko) lewat 1 fungsi RPC `data_wali_santri`.
-   Tidak pakai IndexedDB/antrean offline karena app ini tidak pernah menulis
-   data. Akses per santri dikunci dengan No. Induk + Kode Wali (2 faktor,
-   supaya wali lain yang cuma tahu No. Induk anak Anda tidak bisa ikut
-   melihat data anak Anda) -- lihat supabase-wali-santri-akses.sql. */
+/* Read-only, ambil data LANGSUNG dari tabel Supabase (database bersama dengan
+   Aplikasi Pondok/Keuangan/Toko) lewat query per tabel, dibatasi RLS (row level
+   security) di server: wali cuma bisa SELECT baris yang santri_id-nya sama
+   dengan santri_id di profil_akun miliknya. Tidak pakai IndexedDB/antrean
+   offline karena app ini tidak pernah menulis data. */
 
-/* PERBAIKAN (25 Agu 2026): sebelumnya menunjuk ke project 'ujtkwznrvzqktislrgpc', BEDA dari
-   project yang dipakai Aplikasi Pondok/Pembina/Toko ('hvivddbhacoppkbtiqpe'), padahal komentar
-   di atas bilang harusnya database bersama. Sudah diarahkan ke project yang benar (fungsi
-   data_wali_santri sudah dikonfirmasi ada di sana, dan datanya juga sudah dicek langsung ada
-   -- 6 data santri lengkap dengan kode_wali per 28 Agu 2026, jadi bukan penyebab login gagal).
-   Penyebab login gagal yang sebenarnya ternyata ada di sw.js (cache lama tidak pernah
-   dibarui) -- lihat catatan perbaikan di sw.js. */
+/* PERUBAHAN (28 Agu 2026) -- login diganti total ke Supabase Auth:
+   - Sebelumnya: kirim No.Induk + Kode Wali sebagai parameter ke 1 RPC
+     `data_wali_santri` (SECURITY DEFINER yang mencocokkan sendiri lalu
+     mengembalikan semua data dalam 1 JSON).
+   - Sekarang: No.Induk + Kode Wali dipakai untuk sb.auth.signInWithPassword()
+     (email = {no_induk}@pprqsentol.com, password = kode wali -- akun Auth-nya
+     sendiri sudah otomatis dibuat/disamakan oleh Edge Function reset-kode-wali
+     di Aplikasi Pondok setiap kali kode wali dibuat/direset). Setelah Auth
+     berhasil, data ditarik langsung per tabel (santri, mahram, kegiatan,
+     absensi, hafalan, transaksi_saldo, transaksi_toko, tagihan, jenis_tagihan,
+     iuran_detail) -- RPC data_wali_santri SUDAH TIDAK DIPAKAI lagi.
+   - Form login & cara pemakaian wali TIDAK berubah (tetap isi No. Induk +
+     Kode Wali yang sama).
+   - Proteksi brute-force (dulu: kunci 10x percobaan gagal/15 menit per No.
+     Induk lewat tabel percobaan_login) SEKARANG diserahkan ke Supabase Auth
+     bawaan (tidak dibuatkan mekanisme sendiri lagi).
+   - Kalau ada santri lama yang kode walinya dibuat SEBELUM Edge Function
+     reset-kode-wali ada / sebelum di-update untuk membuat akun Auth, wali-nya
+     perlu direset dulu kode walinya dari Aplikasi Pondok (tombol "Cabut &
+     buat kode baru") supaya akun Auth-nya ikut terbuat.
+   - sesi Auth SENGAJA tidak disimpan ke localStorage (persistSession: false),
+     supaya perilakunya tetap sama seperti sebelumnya: sesi cuma bertahan
+     selama tab/aplikasi terbuka (ME di sessionStorage), bukan tersimpan
+     permanen di HP -- penting kalau HP-nya dipakai bergantian antar wali. */
 const SUPABASE_URL = 'https://hvivddbhacoppkbtiqpe.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BTFxSTrt1vM1seoQaXG_7g_mqYo5aqq';
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
 
 /* ====== PASANG APLIKASI (PWA) ======
    Chrome/Edge di Android baru menawarkan pasang otomatis setelah kriteria
@@ -115,9 +133,44 @@ function todayStr(){ return new Date().toISOString().slice(0,10); }
 function rupiah(n){ return 'Rp ' + (n||0).toLocaleString('id-ID'); }
 function totalHalaman(h){ return (h.juz-1)*20 + h.halaman; }
 
-/* ---------- LOGIN (No. Induk + Kode Wali, lewat RPC) ---------- */
-function initLogin(){
-  if(ME){ muatDataWali(ME.noInduk, ME.kodeWali, true); }
+/* ---------- NOTIF GETAR + BUNYI (scan berhasil & login berhasil) ----------
+   Getar lewat Vibration API (didukung sebagian besar HP Android; di iPhone/Safari
+   API ini memang tidak didukung sama sekali, jadi di iPhone cuma bunyi yang berbunyi).
+   Bunyi dibuat langsung lewat Web Audio API (nada pendek), tidak perlu file suara
+   terpisah. AudioContext baru boleh dibuat/dijalankan setelah ada interaksi
+   pengguna (klik tombol dsb), makanya dibuat sekali saja & disimpan di variabel. */
+let audioCtxNotif = null;
+function getarBerhasil(){
+  try{ if(navigator.vibrate) navigator.vibrate(150); }catch(e){}
+}
+function bunyiBerhasil(){
+  try{
+    audioCtxNotif = audioCtxNotif || new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = audioCtxNotif;
+    if(ctx.state === 'suspended') ctx.resume();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.type = 'sine';
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+    o.start();
+    o.stop(ctx.currentTime + 0.2);
+  }catch(e){}
+}
+function notifBerhasil(){ getarBerhasil(); bunyiBerhasil(); }
+
+/* ---------- LOGIN (Supabase Auth: email = No.Induk@pprqsentol.com, password = Kode Wali) ---------- */
+const EMAIL_DOMAIN_WALI = 'pprqsentol.com';
+// Sama persis dengan cara Edge Function reset-kode-wali membentuk email-nya
+// (no_induk di-trim, di-lowercase, spasi dibuang) -- supaya selalu cocok.
+function emailWaliDari(noInduk){
+  return (noInduk||'').trim().toLowerCase().replace(/\s+/g,'') + '@' + EMAIL_DOMAIN_WALI;
+}
+async function initLogin(){
+  if(ME){ await muatDataWali(ME.noInduk, ME.kodeWali, true); }
 }
 async function doLogin(){
   const noInduk = val('loginNoInduk').trim();
@@ -130,38 +183,83 @@ async function doLogin(){
     ME = { noInduk, kodeWali };
     sessionStorage.setItem('wali_session', JSON.stringify(ME));
     msg.textContent = '';
-    enterApp();
+    notifBerhasil(); // getar + bunyi saat login berhasil
   } else {
     msg.textContent = 'No. Induk / Kode Wali salah, atau sedang tidak ada internet.';
   }
 }
-// Ambil data lewat RPC. Kalau offline dan sebelumnya pernah berhasil login (ME ada),
-// pakai cadangan terakhir supaya tetap bisa dilihat -- tapi TIDAK bisa dipakai untuk
-// login pertama kali (harus online dulu sekali untuk diverifikasi server).
+/* Login ke Supabase Auth, lalu ambil data langsung per tabel (dibatasi RLS di server
+   supaya cuma data santri milik wali yang login yang boleh terbaca). Kalau offline dan
+   sebelumnya pernah berhasil login (ME ada), pakai cadangan terakhir supaya tetap bisa
+   dilihat -- tapi TIDAK bisa dipakai untuk login pertama kali (harus online dulu sekali). */
 async function muatDataWali(noInduk, kodeWali, izinkanCache){
   try{
-    const { data, error } = await sb.rpc('data_wali_santri', { p_no_induk: noInduk, p_kode_wali: kodeWali });
-    if(error || !data){
+    const { error: authError } = await sb.auth.signInWithPassword({
+      email: emailWaliDari(noInduk), password: kodeWali
+    });
+    if(authError){
       if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
       return false;
     }
-    const hasil = dalamCamel(data);
+
+    const { data: s, error: errSantri } = await sb.from('santri').select('*').single();
+    if(errSantri || !s){
+      if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
+      return false;
+    }
+
+    const [
+      { data: mahramRows }, { data: kegiatanRows }, { data: absensiRows },
+      { data: hafalanRows }, { data: saldoRows }, { data: tokoRows },
+      { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows }
+    ] = await Promise.all([
+      sb.from('mahram').select('*').eq('santri_id', s.id),
+      sb.from('kegiatan').select('*').eq('aktif', true),
+      sb.from('absensi').select('*').eq('santri_id', s.id),
+      sb.from('hafalan').select('*').eq('santri_id', s.id).order('tanggal'),
+      sb.from('transaksi_saldo').select('*').eq('santri_id', s.id),
+      sb.from('transaksi_toko').select('*').eq('santri_id', s.id),
+      sb.from('tagihan').select('*').eq('santri_id', s.id),
+      sb.from('jenis_tagihan').select('*'),
+      sb.from('iuran_detail').select('id, santri_id, jumlah, status, tgl_bayar, iuran(tanggal, keterangan)').eq('santri_id', s.id)
+    ]);
+
+    // Bentuk ulang jadi persis nama field yang dipakai di seluruh app.js ini
+    // (sebelumnya dibentuk oleh RPC data_wali_santri di sisi server; sekarang dibentuk di sini).
+    const mahram = (mahramRows||[]).map(m=>({ id:m.id, nama:m.nama, hubungan:m.hubungan||'', hp:m.no_hp||'', foto:m.foto_url||'' }));
     DB = {
-      santri: [hasil.santri],
-      mahram: hasil.mahram || [],
-      kegiatan: hasil.kegiatan || [],
-      absensi: hasil.absensi || [],
-      hafalan: hasil.hafalan || [],
-      transaksiSaldo: hasil.transaksiSaldo || [],
-      transaksiToko: hasil.transaksiToko || [],
-      tagihan: hasil.tagihan || [],
-      jenisTagihan: hasil.jenisTagihan || [],
-      iuranDetail: hasil.iuranDetail || []
+      santri: [{
+        id: s.id, nama: s.nama, noInduk: s.no_induk, foto: s.foto_url||'',
+        tetala: s.tetala||'', alamat: s.alamat||'', tglMasuk: s.tanggal_masuk,
+        jenisKelamin: s.jenis_kelamin||'L', namaAyah: s.nama_ayah||'', namaIbu: s.nama_ibu||'',
+        namaWali: s.nama_wali||'', fotoWali: s.foto_wali||'', kodeWali: s.kode_wali,
+        kelas: s.kelas||'', kamar: s.kamar||'', hpWali: s.no_hp_wali||'',
+        program: s.program||'Non-Takhossus', hafalanAwal: s.hafalan_awal||0,
+        mahram
+      }],
+      mahram,
+      kegiatan: (kegiatanRows||[]).map(k=>({ id:k.id, nama:k.nama, programKhusus:k.program_khusus })),
+      // status mentah di tabel absensi berupa teks ('Hadir'/'Izin'/dst), disamakan ke kode
+      // singkat h/i/a persis seperti yang dulu dilakukan RPC data_wali_santri.
+      absensi: (absensiRows||[]).map(a=>({
+        id:a.id, santriId:a.santri_id, kegiatanId:a.kegiatan_id, tanggal:a.tanggal,
+        status: a.status==='Hadir' ? 'h' : (a.status==='Izin' ? 'i' : 'a')
+      })),
+      hafalan: (hafalanRows||[]).map(h=>({ id:h.id, santriId:h.santri_id, tanggal:h.tanggal, juz:h.juz, halaman:h.halaman_sampai })),
+      transaksiSaldo: (saldoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenis:t.jenis, jumlah:t.jumlah, keterangan:t.keterangan, tanggal:t.tanggal })),
+      transaksiToko: (tokoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, items:t.items, total:t.total, metode:t.metode, statusBayar:t.status_bayar, createdAt:t.created_at })),
+      tagihan: (tagihanRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenisTagihanId:t.jenis_tagihan_id, bulan:t.bulan, jumlah:t.jumlah, status:t.status, tglBayar:t.tgl_bayar })),
+      jenisTagihan: (jenisTagihanRows||[]).map(j=>({ id:j.id, nama:j.nama })),
+      iuranDetail: (iuranDetailRows||[]).map(d=>({
+        id:d.id, santriId:d.santri_id, jumlah:d.jumlah, status:d.status, tglBayar:d.tgl_bayar,
+        tanggal: d.iuran ? d.iuran.tanggal : null, keterangan: d.iuran ? d.iuran.keterangan : null
+      }))
     };
     // saldo santri = total transaksi_saldo, dihitung persis sama seperti Aplikasi Keuangan
-    // (jenis 'setoran' menambah, 'tarik'/'bayar' mengurangi -- lihat saldo_santri view).
+    // (jenis 'setoran' menambah, 'tarik'/'bayar' mengurangi).
     DB.santri[0].saldo = DB.transaksiSaldo.reduce((sum,t)=> sum + (t.jenis==='setoran' ? t.jumlah : -t.jumlah), 0);
     simpanCache(DB);
+    enterApp();
     return true;
   }catch(e){
     if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
@@ -207,9 +305,30 @@ async function bukaScanner(){
     );
     document.getElementById('scanMsg').textContent = 'Arahkan kamera ke kode QR pada kartu wali.';
     setTimeout(cekDukunganTorch, 600);
+    setTimeout(pastikanAutofokus, 600);
   }catch(e){
     document.getElementById('scanMsg').textContent = 'Tidak bisa mengakses kamera. Pastikan izin kamera untuk situs ini diaktifkan.';
   }
+}
+// Sebagian browser/HP mengabaikan constraint fokus yang dikirim lewat html5QrCode.start()
+// di atas, tapi menurutinya kalau dikirim ULANG lewat applyVideoConstraints() setelah
+// kamera benar-benar menyala. Dicoba beberapa mode berurutan (continuous lebih disukai
+// untuk scan QR jarak dekat/berubah-ubah; kalau tidak didukung, browser akan menolaknya
+// dengan error dan diabaikan saja di sini, tanpa mengganggu tampilan).
+async function pastikanAutofokus(){
+  if(!html5QrCode) return;
+  try{
+    const cap = html5QrCode.getRunningTrackCameraCapabilities();
+    const fokus = cap && cap.focusModeFeature && cap.focusModeFeature();
+    if(fokus && fokus.isSupported && fokus.isSupported()){
+      const tersedia = (fokus.value && fokus.value()) || [];
+      const pilihan = ['continuous','single-shot','auto'].find(m=>!tersedia.length || tersedia.includes(m));
+      if(pilihan) await fokus.apply(pilihan);
+      return;
+    }
+  }catch(e){}
+  // fallback kalau API capabilities di atas tidak tersedia -- coba kirim langsung
+  try{ await html5QrCode.applyVideoConstraints({ advanced: [{ focusMode: 'continuous' }] }); }catch(e){}
 }
 function cekDukunganTorch(){
   try{
@@ -232,6 +351,9 @@ async function toggleTorch(){
 function onScanBerhasil(teks){
   const parsed = uraiKodeKartuWali(teks);
   tutupScanner();
+  if(parsed && (parsed.kodeWali || parsed.noInduk)){
+    notifBerhasil(); // getar + bunyi begitu QR-nya berhasil terbaca
+  }
   if(parsed && parsed.kodeWali){
     // QR berisi No. Induk + Kode Wali lengkap -> langsung login
     document.getElementById('loginNoInduk').value = parsed.noInduk;
@@ -278,7 +400,8 @@ async function tutupScanner(){
   }
 }
 
-function logout(){
+async function logout(){
+  await sb.auth.signOut();
   sessionStorage.removeItem('wali_session');
   ME = null;
   document.getElementById('app').style.display='none';
