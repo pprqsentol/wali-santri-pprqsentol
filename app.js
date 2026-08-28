@@ -9,8 +9,10 @@
 /* PERBAIKAN (25 Agu 2026): sebelumnya menunjuk ke project 'ujtkwznrvzqktislrgpc', BEDA dari
    project yang dipakai Aplikasi Pondok/Pembina/Toko ('hvivddbhacoppkbtiqpe'), padahal komentar
    di atas bilang harusnya database bersama. Sudah diarahkan ke project yang benar (fungsi
-   data_wali_santri sudah dikonfirmasi ada di sana). PENTING: kalau project lama itu ternyata
-   masih menyimpan data produksi asli, pastikan datanya sudah dipindah dulu sebelum pakai file ini. */
+   data_wali_santri sudah dikonfirmasi ada di sana, dan datanya juga sudah dicek langsung ada
+   -- 6 data santri lengkap dengan kode_wali per 28 Agu 2026, jadi bukan penyebab login gagal).
+   Penyebab login gagal yang sebenarnya ternyata ada di sw.js (cache lama tidak pernah
+   dibarui) -- lihat catatan perbaikan di sw.js. */
 const SUPABASE_URL = 'https://hvivddbhacoppkbtiqpe.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BTFxSTrt1vM1seoQaXG_7g_mqYo5aqq';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
