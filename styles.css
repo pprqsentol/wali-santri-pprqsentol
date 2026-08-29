@@ -1,7 +1,7 @@
 :root{
   --green-900:#1f3327; --green-700:#2f4d3a; --green-600:#3b5940; --green-100:#e4ece3;
   --bg:#f4f5f0; --card:#ffffff; --border:#dcded6; --text:#232821; --muted:#6b7268;
-  --danger:#a33; --radius:12px;
+  --danger:#a33; --amber:#8a6d13; --radius:12px;
 }
 *{box-sizing:border-box;}
 html{height:100%;overflow-x:hidden;}
@@ -157,6 +157,9 @@ label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;}
 .tag-nontakhossus{background:var(--green-100);color:var(--green-700);}
 .tag-lunas{background:var(--green-100);color:var(--green-700);}
 .tag-belum{background:#fde2e1;color:#a8332f;}
+.tag-hadir{background:var(--green-100);color:var(--green-700);}
+.tag-izin{background:#fdf1cf;color:#8a6d13;}
+.tag-alpha{background:#fde2e1;color:#a8332f;}
 .pill-btn{border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:12px;background:#fff;}
 .pill-btn.on{background:var(--green-600);color:#fff;border-color:var(--green-600);}
 
@@ -177,6 +180,15 @@ table{min-width:420px;}
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--border);}
 th{color:var(--muted);font-weight:600;font-size:12px;}
+
+/* Kolom rekap Hadir/Izin/Alpha di tabel Absensi -- rata tengah, tiap status
+   diberi warna sendiri (hijau/kuning/merah) supaya langsung kebaca sekilas
+   tanpa perlu buka rincian per tanggal. */
+.tbl-absensi th.c, .tbl-absensi td.c{text-align:center;}
+.tbl-absensi td.num-hadir{color:var(--green-700);font-weight:700;}
+.tbl-absensi td.num-izin{color:var(--amber);font-weight:700;}
+.tbl-absensi td.num-alpha{color:var(--danger);font-weight:700;}
+.tbl-absensi td.num-zero{color:var(--muted);}
 
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:100;}

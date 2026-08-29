@@ -574,6 +574,8 @@ function renderRiwayat(){
 
 /* ---------- ABSENSI ---------- */
 let absMode='bulan', absFrom='', absTo=todayStr();
+const LABEL_STATUS_ABSEN = { h:'Hadir', i:'Izin', a:'Alpha' };
+const TAG_STATUS_ABSEN = { h:'tag-hadir', i:'tag-izin', a:'tag-alpha' };
 function setAbsPeriode(mode){ absMode=mode; const r=rentangPeriode(mode); absFrom=r.dari; absTo=r.sampai; renderAbsensi(); }
 function renderAbsensi(){
   if(!absFrom){ const r=rentangPeriode(absMode); absFrom=r.dari; absTo=r.sampai; }
@@ -581,6 +583,10 @@ function renderAbsensi(){
   const items = DB.absensi.filter(a=>a.santriId===s.id && a.tanggal>=absFrom && a.tanggal<=absTo);
   const byKegiatan = {};
   items.forEach(a=>{ byKegiatan[a.kegiatanId] = byKegiatan[a.kegiatanId]||[]; byKegiatan[a.kegiatanId].push(a); });
+  // Daftar lengkap tiap catatan (semua status: Hadir/Izin/Alpha), diurutkan tanggal
+  // terbaru dulu -- supaya Izin/Alpha tidak "hilang" dan wali bisa lihat rincian
+  // per kegiatan per tanggal, tidak cuma rekap persentase hadir saja.
+  const rincian = items.slice().sort((a,b)=> b.tanggal.localeCompare(a.tanggal) || (a.kegiatanId||'').localeCompare(b.kegiatanId||''));
   document.getElementById('content').innerHTML = `
     <h2>Absensi</h2>
     ${tabsPeriode(absMode, 'setAbsPeriode')}
@@ -589,14 +595,34 @@ function renderAbsensi(){
       <div><label>Sampai tanggal</label><input type="date" value="${absTo}" onchange="absTo=this.value; absMode=''; renderAbsensi()"></div>
     </div>
     <div class="card">
-      ${Object.keys(byKegiatan).length===0?'<p class="muted">Belum ada data absensi pada periode ini.</p>':Object.keys(byKegiatan).map(kid=>{
+      <div class="card-title">Ringkasan per kegiatan</div>
+      ${Object.keys(byKegiatan).length===0?'<p class="muted">Belum ada data absensi pada periode ini.</p>':`<table class="tbl-absensi">
+      <tr><th>Kegiatan</th><th class="c">Hadir</th><th class="c">Izin</th><th class="c">Alpha</th><th class="c">%</th></tr>
+      ${Object.keys(byKegiatan).map(kid=>{
         const kg = DB.kegiatan.find(k=>k.id===kid);
         const arr = byKegiatan[kid];
         const hadir = arr.filter(a=>a.status==='h').length;
+        const izin = arr.filter(a=>a.status==='i').length;
+        const alpha = arr.filter(a=>a.status==='a').length;
         const pct = Math.round(hadir/arr.length*100);
-        const predikat = pct>=90?'Sangat baik':pct>=75?'Baik':pct>=50?'Cukup':'Perlu perhatian';
-        return `<div class="list-item"><div style="flex:1"><div class="name">${kg?escapeHtml(kg.nama):'-'}</div><div class="sub">${hadir}/${arr.length} hadir</div></div><span class="tag tag-nontakhossus">${pct}% - ${predikat}</span></div>`;
-      }).join('')}
+        return `<tr>
+          <td>${kg?escapeHtml(kg.nama):'-'}</td>
+          <td class="c num-hadir">${hadir}</td>
+          <td class="c ${izin>0?'num-izin':'num-zero'}">${izin}</td>
+          <td class="c ${alpha>0?'num-alpha':'num-zero'}">${alpha}</td>
+          <td class="c">${pct}%</td>
+        </tr>`;
+      }).join('')}</table>`}
+    </div>
+    <div class="card">
+      <div class="card-title">Rincian per tanggal</div>
+      ${rincian.length===0?'<p class="muted">Belum ada data absensi pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Status</th></tr>
+      ${rincian.map(a=>{
+        const kg = DB.kegiatan.find(k=>k.id===a.kegiatanId);
+        const label = LABEL_STATUS_ABSEN[a.status] || a.status;
+        const tagClass = TAG_STATUS_ABSEN[a.status] || 'tag-nontakhossus';
+        return `<tr><td>${a.tanggal}</td><td>${kg?escapeHtml(kg.nama):'-'}</td><td><span class="tag ${tagClass}">${label}</span></td></tr>`;
+      }).join('')}</table>`}
     </div>
   `;
 }
