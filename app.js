@@ -114,7 +114,7 @@ const CACHE_KEY = 'wali_cache_v1'; // cadangan tampilan terakhir saja (bukan sum
 function simpanCache(db){ try{ localStorage.setItem(CACHE_KEY, JSON.stringify(db)); }catch(e){} }
 function ambilCache(){ try{ return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); }catch(e){ return null; } }
 
-let DB = { santri: [], mahram: [], kegiatan: [], absensi: [], hafalan: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [] };
+let DB = { santri: [], mahram: [], kegiatan: [], absensi: [], hafalan: [], murojaah: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [] };
 let ME = JSON.parse(sessionStorage.getItem('wali_session') || 'null'); // {noInduk, kodeWali} -- hanya untuk sesi berjalan, tidak dicadangkan ke localStorage
 
 const NAV = [
@@ -210,13 +210,14 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
 
     const [
       { data: mahramRows }, { data: kegiatanRows }, { data: absensiRows },
-      { data: hafalanRows }, { data: saldoRows }, { data: tokoRows },
+      { data: hafalanRows }, murojaahRes, { data: saldoRows }, { data: tokoRows },
       { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows }
     ] = await Promise.all([
       sb.from('mahram').select('*').eq('santri_id', s.id),
       sb.from('kegiatan').select('*').eq('aktif', true),
       sb.from('absensi').select('*').eq('santri_id', s.id),
       sb.from('hafalan').select('*').eq('santri_id', s.id).order('tanggal'),
+      sb.from('murojaah').select('*').eq('santri_id', s.id).order('tanggal'),
       sb.from('transaksi_saldo').select('*').eq('santri_id', s.id),
       sb.from('transaksi_toko').select('*').eq('santri_id', s.id),
       sb.from('tagihan').select('*').eq('santri_id', s.id),
@@ -245,7 +246,8 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
         id:a.id, santriId:a.santri_id, kegiatanId:a.kegiatan_id, tanggal:a.tanggal,
         status: a.status==='Hadir' ? 'h' : (a.status==='Izin' ? 'i' : 'a')
       })),
-      hafalan: (hafalanRows||[]).map(h=>({ id:h.id, santriId:h.santri_id, tanggal:h.tanggal, juz:h.juz, halaman:h.halaman_sampai })),
+      hafalan: (hafalanRows||[]).map(h=>({ id:h.id, santriId:h.santri_id, tanggal:h.tanggal, juz:h.juz, halaman:h.halaman_sampai, kegiatanId:h.kegiatan_id||null })),
+      murojaah: (murojaahRes && !murojaahRes.error) ? (murojaahRes.data||[]).map(m=>({ id:m.id, santriId:m.santri_id, kegiatanId:m.kegiatan_id, tanggal:m.tanggal, juz:m.juz, cakupan:m.cakupan })) : [],
       transaksiSaldo: (saldoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenis:t.jenis, jumlah:t.jumlah, keterangan:t.keterangan, tanggal:t.tanggal })),
       transaksiToko: (tokoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, items:t.items, total:t.total, metode:t.metode, statusBayar:t.status_bayar, createdAt:t.created_at })),
       tagihan: (tagihanRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenisTagihanId:t.jenis_tagihan_id, bulan:t.bulan, jumlah:t.jumlah, status:t.status, tglBayar:t.tgl_bayar })),
@@ -633,7 +635,9 @@ function setHfPeriode(mode){ hfMode=mode; const r=rentangPeriode(mode); hfFrom=r
 function renderHafalan(){
   if(!hfFrom){ const r=rentangPeriode(hfMode); hfFrom=r.dari; hfTo=r.sampai; }
   const s = mySantri();
+  const namaKegiatan = kid => (DB.kegiatan.find(k=>k.id===kid)||{}).nama || '-';
   const items = DB.hafalan.filter(h=>h.santriId===s.id && h.tanggal>=hfFrom && h.tanggal<=hfTo).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+  const murojaahItems = (DB.murojaah||[]).filter(m=>m.santriId===s.id && m.tanggal>=hfFrom && m.tanggal<=hfTo).sort((a,b)=>b.tanggal.localeCompare(a.tanggal));
   const tambah = items.length>=2 ? totalHalaman(items[items.length-1])-totalHalaman(items[0]) : 0;
   document.getElementById('content').innerHTML = `
     <h2>Hafalan</h2>
@@ -648,8 +652,12 @@ function renderHafalan(){
       <canvas id="chartHafalan" width="600" height="200" style="width:100%;height:170px"></canvas>
     </div>
     <div class="card">
-      <div class="card-title">Riwayat input</div>
-      ${items.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Juz</th><th>Halaman</th></tr>${items.slice().reverse().map(h=>`<tr><td>${h.tanggal}</td><td>${h.juz}</td><td>${h.halaman}</td></tr>`).join('')}</table>`}
+      <div class="card-title">Riwayat Setoran (menambah hafalan baru)</div>
+      ${items.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Halaman</th></tr>${items.slice().reverse().map(h=>`<tr><td>${h.tanggal}</td><td>${escapeHtml(namaKegiatan(h.kegiatanId))}</td><td>${h.juz}</td><td>${h.halaman}</td></tr>`).join('')}</table>`}
+    </div>
+    <div class="card">
+      <div class="card-title">Riwayat Setoran 2 / Murojaah (mengulang hafalan)</div>
+      ${murojaahItems.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Cakupan</th></tr>${murojaahItems.map(m=>`<tr><td>${m.tanggal}</td><td>${escapeHtml(namaKegiatan(m.kegiatanId))}</td><td>${m.juz}</td><td>${escapeHtml(m.cakupan)}</td></tr>`).join('')}</table>`}
     </div>
   `;
   drawTrend(items);
