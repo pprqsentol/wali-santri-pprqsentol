@@ -61,7 +61,26 @@ button{cursor:pointer;font-family:inherit;}
   .bottomnav .navitem .ic{font-size:15px;}
 }
 
-.layout{display:flex;min-height:calc(100vh - var(--topbar-h, 53px));min-height:calc(100dvh - var(--topbar-h, 53px));}
+/* #app dulu dibiarkan "block" biasa: topbar + .layout (min-height sisa
+   layar) + bottomnav ditumpuk mengikuti alur dokumen apa adanya. Masalahnya
+   .layout pakai MIN-height (bukan height), jadi begitu topbar + tinggi minimal
+   .layout dijumlah, totalnya sudah PAS 100dvh -- padahal masih ada bottomnav
+   di bawahnya yang butuh tempat sendiri. Akibatnya tinggi seluruh halaman
+   jadi 100dvh + tinggi bottomnav, alias lebih tinggi dari layar yang
+   kelihatan, dan bottomnav (position:sticky) jadi berada di luar area yang
+   langsung terlihat sampai halaman digeser/discroll dulu.
+   Diperbaiki dengan menjadikan #app kolom flex setinggi PERSIS layar
+   (height, bukan min-height): topbar & bottomnav dapat tempatnya sendiri
+   sesuai ukuran aslinya, sisanya (flex:1) jatah .layout -- sehingga total
+   tinggi topbar+layout+bottomnav SELALU pas 100dvh, bottomnav pasti
+   langsung kelihatan tanpa perlu discroll, di HP mana pun. Kalau isi
+   halaman lebih panjang dari layar, yang discroll cuma .content-nya
+   sendiri (overflow-y:auto), bukan seluruh halaman. */
+#app.screen{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;}
+.topbar{flex-shrink:0;}
+.layout{flex:1;display:flex;min-height:0;overflow:hidden;}
+.content{overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.bottomnav{flex-shrink:0;}
 .sidebar{display:none;}
 /* min-width:0 itu kuncinya: secara default elemen flex ("content" di sini)
    tidak mau menyusut lebih kecil dari lebar aslinya, jadi kalau ada isi
@@ -114,11 +133,10 @@ button{cursor:pointer;font-family:inherit;}
    sidebar dan area scroll konten adalah dua kotak terpisah. */
 @media (min-width:800px){
   .bottomnav{display:none;}
-  .layout{
-    height:calc(100vh - var(--topbar-h, 53px));
-    height:calc(100dvh - var(--topbar-h, 53px));
-    overflow:hidden;
-  }
+  /* .layout sudah flex:1 (mengisi PERSIS sisa tinggi kolom #app) & overflow:hidden
+     dari aturan dasar di atas -- tidak perlu lagi height:calc(...) pakai --topbar-h,
+     jadi berlaku juga kalau topbar berubah tinggi (mis. mode landscape ringkas)
+     tanpa perlu JS mengukur ulang. */
   .sidebar{display:flex;flex-direction:column;width:190px;flex-shrink:0;background:var(--card);border-right:1px solid var(--border);padding:14px 8px;gap:2px;
     height:100%;
     overflow-y:auto;
@@ -126,7 +144,7 @@ button{cursor:pointer;font-family:inherit;}
   .sidebar .navitem{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;border:none;background:none;text-align:left;color:var(--text);font-size:14px;}
   .sidebar .navitem.active{background:var(--green-100);color:var(--green-700);font-weight:600;}
   .sidebar .navitem.navitem-logout{margin-top:auto;color:var(--danger);border-top:1px solid var(--border);border-radius:0;padding-top:14px;}
-  .content{padding:20px;height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  .content{padding:20px;height:100%;}
 }
 
 /* Cards / generic UI */

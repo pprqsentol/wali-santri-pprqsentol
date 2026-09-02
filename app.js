@@ -409,24 +409,18 @@ async function logout(){
   document.getElementById('app').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
 }
-/* Ukur tinggi topbar sebenarnya lalu simpan ke CSS variable --topbar-h,
-   supaya .layout tetap menghitung tinggi sisa layar dengan akurat di
-   ukuran topbar berapa pun (topbar dibikin lebih ringkas saat landscape). */
-function syncTopbarHeight(){
-  const tb = document.querySelector('.topbar');
-  if(tb) document.documentElement.style.setProperty('--topbar-h', tb.offsetHeight + 'px');
-}
-window.addEventListener('resize', syncTopbarHeight);
-window.addEventListener('orientationchange', ()=> setTimeout(syncTopbarHeight, 300));
-
 function mySantri(){ return DB.santri[0]; }
 function enterApp(){
   document.getElementById('loginScreen').style.display='none';
-  document.getElementById('app').style.display='block';
+  // PENTING: harus "flex", bukan "block" -- #app sekarang kolom flex
+  // (topbar + .layout + bottomnav dibagi rapi setinggi persis layar lewat
+  // CSS #app.screen{display:flex;...}). Kalau di sini dipaksa jadi "block"
+  // lewat inline style, itu MENIMPA aturan display:flex dari CSS (inline
+  // style menang), dan bottomnav bisa balik lagi jadi hilang/perlu digeser.
+  document.getElementById('app').style.display='flex';
   document.getElementById('anakLabel').textContent = mySantri()?.nama || 'Wali Santri';
   renderNav();
   goPage('beranda');
-  syncTopbarHeight();
 }
 
 /* ---------- NAV ---------- */
@@ -761,5 +755,68 @@ function showModal(title, bodyHtml){
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
 
+/* ---------- TOMBOL "KEMBALI" HP/BROWSER ----------
+   Aplikasi ini SPA satu halaman (tidak pernah ganti URL), jadi kalau
+   dibiarkan apa adanya, tombol kembali fisik/gestur di HP (atau tombol
+   back browser) tidak punya riwayat untuk di-mundurkan -- hasilnya
+   LANGSUNG menutup/keluar dari aplikasi, walau pengguna cuma bermaksud
+   menutup modal atau pindah dari satu tab ke tab sebelumnya.
+   Solusinya: setiap kali masuk aplikasi & setiap kali pindah "layar"
+   (tab, atau buka modal/scanner), sebuah riwayat kosong ditambahkan
+   (history.pushState). Begitu tombol kembali ditekan, yang kepicu
+   duluan adalah event 'popstate' ini -- BUKAN langsung menutup aplikasi
+   -- lalu ditentukan sendiri harus ngapain:
+   1. Kalau ada modal/scanner terbuka -> tutup itu saja.
+   2. Kalau sedang di tab selain Beranda -> pindah ke tab Beranda dulu.
+   3. Kalau sudah di Beranda -> minta ditekan sekali lagi sebelum benar-benar
+      keluar (pola "tekan sekali lagi untuk keluar"), supaya tidak ke-keluar
+      tanpa sengaja gara-gara sekali pijit. */
+let sudahSiapKeluar = false;
+let timerSiapKeluar = null;
+function pasangPenjagaKembali(){
+  history.pushState({ penjagaWali: true }, '');
+}
+function adaModalTerbuka(){
+  const scannerTerbuka = document.getElementById('scannerModal').style.display !== 'none';
+  const modalLainTerbuka = document.getElementById('modalRoot').innerHTML.trim() !== '';
+  return scannerTerbuka || modalLainTerbuka;
+}
+function tampilkanPesanSekaliLagi(){
+  const p = document.createElement('div');
+  p.textContent = 'Tekan kembali sekali lagi untuk keluar dari aplikasi';
+  p.style.cssText = 'position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0) + 74px);transform:translateX(-50%);background:#232821;color:#fff;padding:9px 16px;border-radius:20px;font-size:12.5px;z-index:999;box-shadow:0 2px 10px rgba(0,0,0,.25);white-space:nowrap;';
+  document.body.appendChild(p);
+  setTimeout(()=> p.remove(), 1800);
+}
+window.addEventListener('popstate', ()=>{
+  if(adaModalTerbuka()){
+    tutupScanner();
+    closeModal();
+    pasangPenjagaKembali();
+    return;
+  }
+  const appTerlihat = document.getElementById('app').style.display !== 'none';
+  if(appTerlihat && currentPage !== 'beranda'){
+    goPage('beranda');
+    pasangPenjagaKembali();
+    return;
+  }
+  if(appTerlihat && currentPage === 'beranda'){
+    if(sudahSiapKeluar){
+      logout(); // sesi ditutup rapi dulu, baru boleh benar-benar keluar dari aplikasi
+      return;
+    }
+    sudahSiapKeluar = true;
+    tampilkanPesanSekaliLagi();
+    pasangPenjagaKembali();
+    clearTimeout(timerSiapKeluar);
+    timerSiapKeluar = setTimeout(()=>{ sudahSiapKeluar = false; }, 2000);
+    return;
+  }
+  // Masih di halaman login (belum masuk aplikasi): biarkan tombol kembali
+  // bekerja seperti biasa (boleh menutup aplikasi dari sini).
+});
+
 /* ---------- INIT ---------- */
+pasangPenjagaKembali();
 initLogin();
