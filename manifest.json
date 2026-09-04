@@ -1,7 +1,7 @@
 {
-  "name": "Aplikasi Pembina - Roudhotul Qur'an",
-  "short_name": "Pembina RQ",
-  "description": "Aplikasi input absensi dan hafalan santri untuk pembina Pondok Roudhotul Qur'an",
+  "name": "Wali Santri - Roudhotul Qur'an",
+  "short_name": "Wali Santri RQ",
+  "description": "Aplikasi lihat data santri (saldo, hafalan, absensi, tagihan) untuk wali santri Pondok Roudhotul Qur'an",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#f4f5f0",

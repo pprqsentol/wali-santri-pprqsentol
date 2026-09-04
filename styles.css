@@ -1,11 +1,19 @@
 :root{
   --green-900:#1f3327; --green-700:#2f4d3a; --green-600:#3b5940; --green-100:#e4ece3;
   --bg:#f4f5f0; --card:#ffffff; --border:#dcded6; --text:#232821; --muted:#6b7268;
-  --danger:#a33; --radius:12px;
+  --danger:#a33; --amber:#8a6d13; --radius:12px;
 }
 *{box-sizing:border-box;}
-body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
-.screen{min-height:100vh;}
+html{height:100%;overflow-x:hidden;}
+body{margin:0;min-height:100%;overflow-x:hidden;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
+/* min-height:100vh di sebagian browser mobile (terutama landscape) dihitung
+   dari tinggi viewport SAAT toolbar/address bar sedang tersembunyi. Begitu
+   toolbar muncul lagi (mis. waktu discroll ke atas), tinggi 100vh jadi tidak
+   akurat lagi dan elemen position:fixed di dalamnya bisa "salah tempat".
+   100dvh (dynamic viewport height) selalu mengikuti tinggi layar yang
+   benar-benar terlihat saat itu, jadi dipakai duluan sebagai fallback aman
+   kalau browser belum kenal dvh. */
+.screen{min-height:100vh;min-height:100dvh;}
 h1,h2,h3{font-weight:600;margin:0 0 4px;}
 .muted{color:var(--muted);font-size:13px;}
 button{cursor:pointer;font-family:inherit;}
@@ -18,43 +26,125 @@ button{cursor:pointer;font-family:inherit;}
 .login-box select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-size:15px;}
 .btn-primary{width:100%;margin-top:20px;padding:12px;border:none;border-radius:8px;background:var(--green-600);color:#fff;font-size:15px;font-weight:600;}
 .btn-primary:active{background:var(--green-700);}
+.btn-scan{width:100%;margin-top:10px;padding:11px;border-radius:8px;border:1px solid var(--green-600);background:#fff;color:var(--green-600);font-size:14px;font-weight:600;}
+.btn-scan:active{background:var(--green-100);}
+
+/* Toggle lihat/sembunyikan isian login */
+.input-eye{position:relative;}
+.input-eye input{padding-right:64px;}
+.eye-btn{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:1px solid var(--border);border-radius:6px;font-size:11px;padding:5px 8px;color:var(--green-700);}
+
+/* Modal scanner kamera */
+.scanner-box{max-width:380px;}
+#qrReader{border-radius:10px;overflow:hidden;background:#000;min-height:240px;}
+#qrReader video{border-radius:10px;width:100%;}
+#torchBtn.on{background:var(--green-600);color:#fff;border-color:var(--green-600);}
 
 /* Top bar */
 .topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;}
 .topbar-logo{width:32px;height:32px;border-radius:50%;object-fit:cover;}
 .topbar-title{font-weight:600;font-size:15px;}
 .topbar-sub{font-size:12px;color:var(--muted);}
-.icon-btn{margin-left:auto;background:none;border:none;font-size:20px;color:var(--muted);padding:6px;}
 
-.layout{display:flex;min-height:calc(100vh - 53px);}
+/* Mode landscape (HP dimiringkan, tinggi layar sempit): topbar dulunya
+   judul & subjudulnya bertumpuk atas-bawah dan makan banyak tinggi layar.
+   Di sini dibikin lebih ringkas & dijejer kiri-kanan (bukan atas-bawah
+   lagi), supaya konten/daftar di bawahnya tidak ikut tertutup. */
+@media (orientation:landscape) and (max-height:500px){
+  .topbar{padding:6px 14px;gap:8px;}
+  .topbar-logo{width:24px;height:24px;}
+  .topbar > div{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;}
+  .topbar-title{font-size:13px;}
+  .topbar-sub{font-size:11px;}
+
+  .bottomnav .navitem{padding:5px 2px;gap:1px;font-size:9px;}
+  .bottomnav .navitem .ic{font-size:15px;}
+}
+
+/* #app dulu dibiarkan "block" biasa: topbar + .layout (min-height sisa
+   layar) + bottomnav ditumpuk mengikuti alur dokumen apa adanya. Masalahnya
+   .layout pakai MIN-height (bukan height), jadi begitu topbar + tinggi minimal
+   .layout dijumlah, totalnya sudah PAS 100dvh -- padahal masih ada bottomnav
+   di bawahnya yang butuh tempat sendiri. Akibatnya tinggi seluruh halaman
+   jadi 100dvh + tinggi bottomnav, alias lebih tinggi dari layar yang
+   kelihatan, dan bottomnav (position:sticky) jadi berada di luar area yang
+   langsung terlihat sampai halaman digeser/discroll dulu.
+   Diperbaiki dengan menjadikan #app kolom flex setinggi PERSIS layar
+   (height, bukan min-height): topbar & bottomnav dapat tempatnya sendiri
+   sesuai ukuran aslinya, sisanya (flex:1) jatah .layout -- sehingga total
+   tinggi topbar+layout+bottomnav SELALU pas 100dvh, bottomnav pasti
+   langsung kelihatan tanpa perlu discroll, di HP mana pun. Kalau isi
+   halaman lebih panjang dari layar, yang discroll cuma .content-nya
+   sendiri (overflow-y:auto), bukan seluruh halaman. */
+#app.screen{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;}
+.topbar{flex-shrink:0;}
+.layout{flex:1;display:flex;min-height:0;overflow:hidden;}
+.content{overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.bottomnav{flex-shrink:0;}
 .sidebar{display:none;}
-.content{flex:1;padding:14px;padding-bottom:80px;max-width:960px;margin:0 auto;width:100%;}
+/* min-width:0 itu kuncinya: secara default elemen flex ("content" di sini)
+   tidak mau menyusut lebih kecil dari lebar aslinya, jadi kalau ada isi
+   lebar (misalnya tabel di dalam .card) tanpa min-width:0, bukan tabelnya
+   yang di-scroll sendiri (overflow-x:auto di .card) tapi seluruh baris
+   .layout (termasuk sidebar/navigasi di sebelah kiri) yang ikut melebar dan
+   ikut tergeser saat digeser ke kanan. Dengan min-width:0, .content dipaksa
+   menghormati lebar layar, dan scroll horizontal jadi kekunci di dalam
+   .card tempat tabelnya berada -- sidebar/navigasi di kiri jadi diam. */
+.content{flex:1;min-width:0;padding:14px;padding-bottom:24px;max-width:960px;margin:0 auto;width:100%;}
 
-/* Bottom nav (mobile) */
-.bottomnav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);display:flex;z-index:10;}
+/* Bottom nav (mobile). Dulu pakai position:fixed supaya diam di tempat,
+   tapi position:fixed dihitung terhadap ukuran viewport yang "dibekukan"
+   saat itu -- di HP (apalagi landscape, karena tinggi layarnya sudah mepet
+   dan toolbar browser makan porsi lebih besar) begitu address bar
+   muncul/hilang saat discroll, posisi fixed itu jadi meleset dan nav bisa
+   tampak tergeser bahkan hilang di bawah layar.
+   position:sticky ke bawah lebih aman: dihitung langsung dari alur halaman
+   yang sesungguhnya (bukan ukuran viewport yang dibekukan), jadi nav selalu
+   nempel pas di tepi bawah layar yang sedang terlihat, baik portrait maupun
+   landscape, dan tidak pernah "kabur" saat toolbar browser muncul/hilang. */
+.bottomnav{position:sticky;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--border);display:flex;z-index:10;
+  /* HP dengan notch/gesture-bar: di landscape area aman biasanya ada di kiri/kanan,
+     tapi tetap beri padding-bottom aman untuk device yang taruhnya di bawah. */
+  padding-bottom:env(safe-area-inset-bottom, 0);
+  padding-left:env(safe-area-inset-left, 0);
+  padding-right:env(safe-area-inset-right, 0);
+}
 .bottomnav .navitem{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 2px;background:none;border:none;color:var(--muted);font-size:10px;}
 .bottomnav .navitem.active{color:var(--green-600);}
 .bottomnav .navitem .ic{font-size:18px;}
+.navitem .ic svg{display:block;}
+.bottomnav .navitem.navitem-logout{color:var(--danger);}
 
-/* Tombol aksi (Refresh & Keluar) di tab navigasi -- dipisahkan sedikit
-   dari tombol halaman supaya jelas ini bukan pindah halaman, tapi aksi. */
-.navitem-action{position:relative;}
-.bottomnav .navitem-action{border-left:1px solid var(--border);}
-.navitem-action:disabled{opacity:0.5;}
-.navitem-action.spinning .ic{display:inline-block;animation:navspin 0.7s linear infinite;}
-#navaction-logout .ic{color:var(--danger);}
-.sidebar .navitem-action{color:var(--muted);}
-@keyframes navspin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
-
-/* Sidebar (desktop) */
+/* Sidebar (desktop / HP landscape yang lebar layarnya di atas 800px)
+   Dulu sidebar dibikin "position:sticky" supaya nempel diam sementara
+   .content di sebelahnya discroll. Masalahnya position:sticky itu
+   dihitung berdasarkan tinggi halaman (html/body) yang discroll --
+   di HP, terutama landscape, address bar browser yang muncul/hilang
+   saat discroll bikin tinggi viewport (dan max-height:100dvh milik
+   sidebar) berubah-ubah di tengah gerakan scroll, jadi sidebar sempat
+   "kebawa" ikut bergeser sebelum akhirnya nempel lagi -- kelihatan
+   seperti sidebar ikut tergeser walau harusnya diam.
+   Sekarang didesain ulang: .layout dikunci setinggi sisa layar
+   (topbar + layout = pas 100dvh, halaman/body sendiri TIDAK discroll
+   sama sekali), lalu HANYA .content yang punya scrollbar sendiri
+   (overflow-y:auto). Karena bukan halaman yang discroll, sidebar di
+   luar area scroll itu otomatis tidak akan pernah ikut bergeser --
+   bukan lagi soal "nempel tepat waktu" seperti sticky, tapi memang
+   sidebar dan area scroll konten adalah dua kotak terpisah. */
 @media (min-width:800px){
   .bottomnav{display:none;}
-  .sidebar{display:flex;flex-direction:column;width:190px;background:var(--card);border-right:1px solid var(--border);padding:14px 8px;gap:2px;}
+  /* .layout sudah flex:1 (mengisi PERSIS sisa tinggi kolom #app) & overflow:hidden
+     dari aturan dasar di atas -- tidak perlu lagi height:calc(...) pakai --topbar-h,
+     jadi berlaku juga kalau topbar berubah tinggi (mis. mode landscape ringkas)
+     tanpa perlu JS mengukur ulang. */
+  .sidebar{display:flex;flex-direction:column;width:190px;flex-shrink:0;background:var(--card);border-right:1px solid var(--border);padding:14px 8px;gap:2px;
+    height:100%;
+    overflow-y:auto;
+  }
   .sidebar .navitem{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;border:none;background:none;text-align:left;color:var(--text);font-size:14px;}
   .sidebar .navitem.active{background:var(--green-100);color:var(--green-700);font-weight:600;}
-  .sidebar .navitem-action{margin-top:8px;}
-  .sidebar .navitem:not(.navitem-action) + .navitem-action{border-top:1px solid var(--border);padding-top:16px;}
-  .content{padding:20px;}
+  .sidebar .navitem.navitem-logout{margin-top:auto;color:var(--danger);border-top:1px solid var(--border);border-radius:0;padding-top:14px;}
+  .content{padding:20px;height:100%;}
 }
 
 /* Cards / generic UI */
@@ -68,10 +158,6 @@ button{cursor:pointer;font-family:inherit;}
 
 .list-item{display:flex;align-items:center;gap:10px;padding:10px 6px;border-bottom:1px solid var(--border);}
 .list-item:last-child{border-bottom:none;}
-.list-item-done{opacity:.55;}
-.badge-done{color:var(--green-600);font-weight:600;}
-.badge-haid{color:#8e44ad;font-weight:600;}
-.btn[disabled]{opacity:.5;cursor:not-allowed;}
 .avatar{width:38px;height:38px;border-radius:50%;background:var(--green-100);color:var(--green-700);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;object-fit:cover;}
 .list-item .name{font-weight:600;font-size:14px;}
 .list-item .sub{font-size:12px;color:var(--muted);}
@@ -87,27 +173,40 @@ label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;}
 .tag{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;}
 .tag-takhossus{background:#fbe8d0;color:#8a5a13;}
 .tag-nontakhossus{background:var(--green-100);color:var(--green-700);}
+.tag-lunas{background:var(--green-100);color:var(--green-700);}
+.tag-belum{background:#fde2e1;color:#a8332f;}
+.tag-hadir{background:var(--green-100);color:var(--green-700);}
+.tag-izin{background:#fdf1cf;color:#8a6d13;}
+.tag-alpha{background:#fde2e1;color:#a8332f;}
 .pill-btn{border:1px solid var(--border);border-radius:20px;padding:4px 12px;font-size:12px;background:#fff;}
 .pill-btn.on{background:var(--green-600);color:#fff;border-color:var(--green-600);}
 
 .chip-group{display:flex;flex-wrap:wrap;gap:6px;}
 
-.tabs{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;}
-.tab{padding:7px 14px;border-radius:20px;border:1px solid var(--border);background:#fff;font-size:13px;white-space:nowrap;}
+.tabs{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;}
+.tab{padding:7px 14px;border-radius:20px;border:1px solid var(--border);background:#fff;font-size:13px;white-space:nowrap;flex-shrink:0;}
 .tab.active{background:var(--green-600);color:#fff;border-color:var(--green-600);}
 
-/* Judul seksi menonjol (mis. Riwayat Keuangan / Riwayat Hafalan / Daftar Tidak Hadir) */
-.section-heading{background:var(--green-600);color:#fff;font-weight:800;font-size:15px;text-transform:uppercase;letter-spacing:.4px;padding:9px 12px;border-radius:8px;margin:14px 0 10px;}
-.section-heading:first-child{margin-top:0;}
-
-/* Kotak highlight untuk angka penting (Total hafalan, Sedang dihafal, dsb) */
-.highlight-box{background:#fff4d6;border:1px solid #f0d878;border-radius:10px;padding:10px 12px;margin-bottom:8px;}
-.highlight-box .hb-label{font-size:11px;font-weight:700;color:#8a5a13;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px;}
-.highlight-box .hb-value{font-size:17px;font-weight:800;color:#1f3327;text-transform:uppercase;letter-spacing:.2px;}
+/* Tabel bisa jadi lebih lebar dari layar (banyak kolom, mis. Riwayat/Tagihan).
+   Dibungkus scroll horizontal di dalam .card-nya sendiri supaya kolom yang
+   kepotong tetap bisa dilihat dengan digeser, bukan malah hilang/terpotong
+   dari layar (terutama saat landscape yang lebar layarnya lebih terbatas
+   tingginya tapi tetap perlu dijaga lebarnya juga). */
+.card{overflow-x:auto;}
+table{min-width:420px;}
 
 table{width:100%;border-collapse:collapse;font-size:13px;}
 th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--border);}
 th{color:var(--muted);font-weight:600;font-size:12px;}
+
+/* Kolom rekap Hadir/Izin/Alpha di tabel Absensi -- rata tengah, tiap status
+   diberi warna sendiri (hijau/kuning/merah) supaya langsung kebaca sekilas
+   tanpa perlu buka rincian per tanggal. */
+.tbl-absensi th.c, .tbl-absensi td.c{text-align:center;}
+.tbl-absensi td.num-hadir{color:var(--green-700);font-weight:700;}
+.tbl-absensi td.num-izin{color:var(--amber);font-weight:700;}
+.tbl-absensi td.num-alpha{color:var(--danger);font-weight:700;}
+.tbl-absensi td.num-zero{color:var(--muted);}
 
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:100;}
@@ -117,24 +216,6 @@ th{color:var(--muted);font-weight:600;font-size:12px;}
 .modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
 .modal-close{background:none;border:none;font-size:20px;color:var(--muted);}
 
-/* Toolbar pencarian + filter program (Hafalan) */
-.hafalan-toolbar{display:flex;align-items:center;gap:8px;background:var(--green-100);border-radius:var(--radius);padding:10px;margin-bottom:12px;flex-wrap:wrap;}
-.hafalan-toolbar .search-box{position:relative;flex:2;min-width:170px;}
-.hafalan-toolbar .search-box input{padding-left:32px;background:var(--card);}
-.hafalan-toolbar .search-box .search-ic{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;pointer-events:none;}
-.hafalan-toolbar select{flex:1;min-width:130px;width:auto;background:var(--card);}
-.icon-btn-square{flex-shrink:0;width:38px;height:38px;padding:0;border-radius:8px;border:2px solid var(--text);background:var(--card);font-size:16px;display:flex;align-items:center;justify-content:center;}
-.icon-btn-square:active{background:var(--green-100);}
-
-/* QR Scanner (absensi) */
-.qr-reader-box{width:100%;border-radius:12px;overflow:hidden;background:#000;min-height:230px;position:relative;}
-.qr-reader-box video{width:100%!important;display:block;}
-.scan-feedback{margin-top:10px;padding:9px 10px;border-radius:8px;font-size:13px;font-weight:600;text-align:center;min-height:18px;background:var(--bg);color:var(--muted);}
-.scan-feedback.ok{background:#e2f3e7;color:#1f6b3a;}
-.scan-feedback.err{background:#fbe7e5;color:#a33;}
-.btn-torch{background:#fff;border:1px solid var(--border);}
-.btn-torch.on{background:#3b3b3b;color:#ffd873;border-color:#3b3b3b;}
-
 /* Attendance grid */
 .att-row{display:flex;align-items:center;justify-content:space-between;padding:9px 4px;border-bottom:1px solid var(--border);}
 .att-opts{display:flex;gap:6px;}
@@ -142,33 +223,19 @@ th{color:var(--muted);font-weight:600;font-size:12px;}
 .att-btn.h.on{background:#2f7d4f;color:#fff;border-color:#2f7d4f;}
 .att-btn.a.on{background:#c0392b;color:#fff;border-color:#c0392b;}
 .att-btn.i.on{background:#d19a24;color:#fff;border-color:#d19a24;}
-.att-btn.hd{font-size:11px;}
-.att-btn.hd.on{background:#8e44ad;color:#fff;border-color:#8e44ad;}
 
 /* Printable card */
-.id-card{width:360px;height:220px;border-radius:16px;background:linear-gradient(135deg,#eef4ee,#dbe8dd);border:1px solid var(--border);padding:0;position:relative;overflow:hidden;margin:0 auto;box-shadow:0 4px 16px rgba(31,51,39,0.12);}
-.id-card::before{content:"";position:absolute;top:0;left:0;right:0;height:6px;background:linear-gradient(90deg,#3b5940,#6b9b6f,#d19a24);}
-.id-card .head{display:flex;align-items:center;gap:8px;background:#1f3327;padding:8px 14px;margin-top:6px;}
-.id-card .head img{width:24px;height:24px;border-radius:50%;background:#fff;padding:2px;}
-.id-card .head .pn{font-size:10px;font-weight:700;color:#eef4ee;letter-spacing:.3px;}
-.id-card .body{display:flex;gap:10px;padding:12px 14px;align-items:stretch;}
-.id-card .left{display:flex;gap:10px;flex:1;min-width:0;}
-.id-card .photo{width:66px;height:84px;border-radius:8px;object-fit:cover;background:#ccc;flex-shrink:0;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.15);}
-.id-card .photo-placeholder{display:flex;align-items:center;justify-content:center;font-size:28px;color:#8aa38d;background:#e4ece3;}
-.id-card .info{font-size:10.5px;line-height:1.55;color:#233a2b;overflow:hidden;}
-.id-card .info .nm{font-size:14px;font-weight:800;margin-bottom:3px;color:#1f3327;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.id-card .qr{flex-shrink:0;width:118px;height:118px;background:#fff;padding:4px;border-radius:10px;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,0.12);align-self:center;}
-.id-card-wali{background:linear-gradient(135deg,#eef1f7,#dbe2ee);}
-.id-card-wali::before{background:linear-gradient(90deg,#2f5d9d,#6f93c9,#d19a24);}
-.id-card-wali .head{background:#1e3a5f;}
-.id-card-mahram{background:linear-gradient(135deg,#f7f0ee,#eedcd7);}
-.id-card-mahram::before{background:linear-gradient(90deg,#9d4a2f,#c98a6f,#d19a24);}
-.id-card-mahram .head{background:#5f2a1e;}
-.print-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px;}
-.print-table th,.print-table td{border:1px solid #999;padding:5px 8px;text-align:left;}
-.print-table th{background:#e4ece3;}
+.id-card{width:340px;height:214px;border-radius:14px;background:linear-gradient(135deg,#f4f5f0,#e4ece3);border:1px solid var(--border);padding:14px;position:relative;overflow:hidden;margin:0 auto;}
+.id-card .head{display:flex;align-items:center;gap:8px;}
+.id-card .head img{width:26px;height:26px;border-radius:50%;}
+.id-card .head .pn{font-size:11px;font-weight:700;color:var(--green-800,#1f3327);}
+.id-card .body{display:flex;gap:12px;margin-top:10px;}
+.id-card .photo{width:76px;height:96px;border-radius:6px;object-fit:cover;background:#ccc;}
+.id-card .info{font-size:11px;line-height:1.5;}
+.id-card .info .nm{font-size:14px;font-weight:700;margin-bottom:2px;}
+.id-card .qr{position:absolute;right:14px;bottom:14px;background:#fff;padding:4px;border-radius:6px;}
 @media print{
   body *{visibility:hidden;}
   #printArea, #printArea *{visibility:visible;}
-  #printArea{position:absolute;left:0;top:0;width:100%;}
+  #printArea{position:absolute;left:0;top:0;}
 }
