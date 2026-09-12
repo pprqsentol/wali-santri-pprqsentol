@@ -117,14 +117,17 @@ function ambilCache(){ try{ return JSON.parse(localStorage.getItem(CACHE_KEY) ||
 let DB = { santri: [], mahram: [], kegiatan: [], absensi: [], hafalan: [], murojaah: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [] };
 let ME = JSON.parse(sessionStorage.getItem('wali_session') || 'null'); // {noInduk, kodeWali} -- hanya untuk sesi berjalan, tidak dicadangkan ke localStorage
 
+// Urutan tab: beranda, info, hafalan, absensi, tagihan, riwayat -- tab Saldo
+// dihapus (dulu di sini) karena isinya cuma mengulang angka yang sudah
+// tampil di Beranda; Saldo saat ini + riwayatnya sekarang cukup diakses
+// lewat kartu "Saldo" di Beranda -> tab Riwayat.
 const NAV = [
   {id:'beranda', label:'Beranda', icon:'&#8962;'},
   {id:'info', label:'Info', icon:'&#128100;'},
-  {id:'saldo', label:'Saldo', icon:'&#128176;'},
-  {id:'riwayat', label:'Riwayat', icon:'&#128203;'},
-  {id:'absensi', label:'Absensi', icon:'&#10003;'},
   {id:'hafalan', label:'Hafalan', icon:'&#128214;'},
-  {id:'tagihan', label:'Tagihan', icon:'&#128179;'}
+  {id:'absensi', label:'Absensi', icon:'&#10003;'},
+  {id:'tagihan', label:'Tagihan', icon:'&#128179;'},
+  {id:'riwayat', label:'Riwayat', icon:'&#128203;'}
 ];
 let currentPage='beranda';
 
@@ -223,9 +226,15 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       return false;
     }
 
+    // 'murojaah' (mengulang hafalan) TETAP diambil -- yang dihapus dulu cuma
+    // nama "Setoran 2" di tampilan, bukan datanya. Datanya mencakup semua
+    // kegiatan murojaah (Murojaah 1/2/3, atau kegiatan lain yang dicatat
+    // sebagai murojaah), sudah dicek langsung ke Supabase kolomnya cocok
+    // (juz, cakupan, keterangan, tanggal) dan RLS-nya benar (wali cuma lihat
+    // punya anaknya sendiri lewat policy wali_lihat_murojaah_anak_sendiri).
     const [
       { data: mahramRows }, { data: kegiatanRows }, { data: absensiRows },
-      { data: hafalanRows }, murojaahRes, { data: saldoRows }, { data: tokoRows },
+      { data: hafalanRows }, { data: murojaahRows }, { data: saldoRows }, { data: tokoRows },
       { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows }
     ] = await Promise.all([
       sb.from('mahram').select('*').eq('santri_id', s.id),
@@ -233,7 +242,7 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       sb.from('absensi').select('*').eq('santri_id', s.id),
       sb.from('hafalan').select('*').eq('santri_id', s.id).order('tanggal'),
       sb.from('murojaah').select('*').eq('santri_id', s.id).order('tanggal'),
-      sb.from('transaksi_saldo').select('*').eq('santri_id', s.id),
+      sb.from('transaksi_saldo').select('*').eq('santri_id', s.id).eq('status', 'aktif'),
       sb.from('transaksi_toko').select('*').eq('santri_id', s.id),
       sb.from('tagihan').select('*').eq('santri_id', s.id),
       sb.from('jenis_tagihan').select('*'),
@@ -262,8 +271,8 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
         status: a.status==='Hadir' ? 'h' : (a.status==='Izin' ? 'i' : 'a')
       })),
       hafalan: (hafalanRows||[]).map(h=>({ id:h.id, santriId:h.santri_id, tanggal:h.tanggal, juz:h.juz, halaman:h.halaman_sampai, kegiatanId:h.kegiatan_id||null, keterangan:h.keterangan||'Lancar' })),
-      murojaah: (murojaahRes && !murojaahRes.error) ? (murojaahRes.data||[]).map(m=>({ id:m.id, santriId:m.santri_id, kegiatanId:m.kegiatan_id, tanggal:m.tanggal, juz:m.juz, cakupan:m.cakupan, keterangan:m.keterangan||'Lancar' })) : [],
-      transaksiSaldo: (saldoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenis:t.jenis, jumlah:t.jumlah, keterangan:t.keterangan, tanggal:t.tanggal })),
+      murojaah: (murojaahRows||[]).map(m=>({ id:m.id, santriId:m.santri_id, kegiatanId:m.kegiatan_id, tanggal:m.tanggal, juz:m.juz, cakupan:m.cakupan, keterangan:m.keterangan||'Lancar' })),
+      transaksiSaldo: (saldoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenis:t.jenis, jumlah:t.jumlah, keterangan:t.keterangan, tanggal:t.tanggal, metode:t.metode })),
       transaksiToko: (tokoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, items:t.items, total:t.total, metode:t.metode, statusBayar:t.status_bayar, createdAt:t.created_at })),
       tagihan: (tagihanRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenisTagihanId:t.jenis_tagihan_id, bulan:t.bulan, jumlah:t.jumlah, status:t.status, tglBayar:t.tgl_bayar })),
       jenisTagihan: (jenisTagihanRows||[]).map(j=>({ id:j.id, nama:j.nama })),
@@ -272,9 +281,22 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
         tanggal: d.iuran ? d.iuran.tanggal : null, keterangan: d.iuran ? d.iuran.keterangan : null
       }))
     };
-    // saldo santri = total transaksi_saldo, dihitung persis sama seperti Aplikasi Keuangan
-    // (jenis 'setoran' menambah, 'tarik'/'bayar' mengurangi).
-    DB.santri[0].saldo = DB.transaksiSaldo.reduce((sum,t)=> sum + (t.jenis==='setoran' ? t.jumlah : -t.jumlah), 0);
+    // saldo santri = total transaksi_saldo berstatus 'aktif' saja, dihitung PERSIS sama
+    // seperti view saldo_santri di database (dipakai Aplikasi Keuangan/Kasir):
+    // - 'setoran' menambah saldo
+    // - 'tarik' mengurangi saldo
+    // - 'bayar' mengurangi saldo HANYA kalau metode-nya 'saldo' atau kosong (belanja
+    //   dibayar pakai saldo). 'bayar' dengan metode 'tunai' (dibayar cash di toko)
+    //   TIDAK mengurangi saldo.
+    // Bug lama: transaksi berstatus 'dibatalkan' ikut dihitung (sudah difilter di query
+    // di atas), dan 'bayar' tunai ikut dianggap mengurangi saldo -- ini yang bikin saldo
+    // di app Wali sempat tampil minus padahal saldo sebenarnya tidak minus.
+    DB.santri[0].saldo = DB.transaksiSaldo.reduce((sum,t)=>{
+      if(t.jenis==='setoran') return sum + t.jumlah;
+      if(t.jenis==='tarik') return sum - t.jumlah;
+      if(t.jenis==='bayar' && (t.metode==='saldo' || !t.metode)) return sum - t.jumlah;
+      return sum;
+    }, 0);
     simpanCache(DB);
     enterApp();
     return true;
@@ -460,7 +482,6 @@ function goPage(p){
   document.querySelectorAll('.navitem').forEach(el=>el.classList.toggle('active', el.dataset.p===p));
   if(p==='beranda') renderBeranda();
   if(p==='info') renderInfo();
-  if(p==='saldo') renderSaldo();
   if(p==='riwayat') renderRiwayat();
   if(p==='absensi') renderAbsensi();
   if(p==='hafalan') renderHafalan();
@@ -492,22 +513,79 @@ function tabsPeriode(mode, fnSet){
   ).join('')}</div>`;
 }
 
+/* ---------- Data ringkasan bersama (dipakai Beranda & Tagihan) ---------- */
+// Gabungan tagihan (SPP dsb) + iuran milik satu santri, sudah diberi label &
+// dipisah belum-bayar/lunas -- dipakai renderTagihan() dan kartu ringkasan
+// di Beranda supaya angkanya SELALU sama persis, tidak dihitung 2x dengan
+// cara berbeda di 2 tempat.
+function dataTagihanIuran(s){
+  const semuaTagihan = DB.tagihan.filter(t=>t.santriId===s.id).map(t=>{
+    const jenis = DB.jenisTagihan.find(j=>j.id===t.jenisTagihanId);
+    const lbl = labelBulan(t.bulan);
+    return { nama: (jenis?jenis.nama:'Tagihan') + (lbl?` (${lbl})`:''), jumlah:t.jumlah, status:t.status, tglBayar:t.tglBayar, urut:t.bulan||'' };
+  });
+  const semuaIuran = DB.iuranDetail.map(it=>{
+    const lbl = it.tanggal ? labelBulan(it.tanggal.slice(0,7)) : '';
+    return { nama:'Iuran' + (it.keterangan?(': '+it.keterangan):'') + (lbl?` (${lbl})`:''), jumlah:it.jumlah, status:it.status, tglBayar:it.tglBayar, urut:it.tanggal||'' };
+  });
+  const semua = [...semuaTagihan, ...semuaIuran];
+  const belum = semua.filter(r=>r.status==='belum').sort((a,b)=>a.urut.localeCompare(b.urut));
+  const lunas = semua.filter(r=>r.status==='lunas').sort((a,b)=>b.urut.localeCompare(a.urut));
+  return { semua, belum, lunas };
+}
+// Ringkasan persentase kehadiran bulan berjalan, dipakai di kartu Beranda.
+function ringkasanAbsensiBulanIni(s){
+  const r = rentangPeriode('bulan');
+  const items = DB.absensi.filter(a=>a.santriId===s.id && a.tanggal>=r.dari && a.tanggal<=r.sampai);
+  if(items.length===0) return { pct:null, hadir:0, total:0 };
+  const hadir = items.filter(a=>a.status==='h').length;
+  return { pct: Math.round(hadir/items.length*100), hadir, total: items.length };
+}
+
 /* ---------- BERANDA ---------- */
+// Kartu profil di atas (gradasi hijau) + daftar ringkasan tersusun ke bawah
+// (bukan grid 2 kolom lagi) supaya masing-masing kartu lebih lega dibaca dan
+// tiap kategori (saldo/hafalan/absensi/tagihan) punya warna ikon sendiri.
+// Tiap kartu ringkasan bisa diketuk untuk langsung pindah ke tab detailnya
+// (kartu Saldo mengarah ke tab Riwayat, karena tab Saldo tersendiri sudah
+// dihapus -- isinya dulu cuma mengulang angka yang sama).
 function renderBeranda(){
   const s = mySantri();
   const lastHafalan = DB.hafalan.filter(h=>h.santriId===s.id).sort((a,b)=>b.tanggal.localeCompare(a.tanggal))[0];
+  const abs = ringkasanAbsensiBulanIni(s);
+  const tg = dataTagihanIuran(s);
   document.getElementById('content').innerHTML = `
-    <div class="card" style="text-align:center">
-      ${s.foto?`<img src="${s.foto}" style="width:80px;height:80px;border-radius:50%;object-fit:cover">`:`<div class="avatar" style="width:80px;height:80px;font-size:24px;margin:0 auto">${escapeHtml((s.nama||'?').slice(0,2).toUpperCase())}</div>`}
-      <h2 style="margin-top:10px">${escapeHtml(s.nama)}</h2>
-      <p class="muted">No. induk ${escapeHtml(s.noInduk)} &middot; ${escapeHtml(s.kelas)||'-'}</p>
+    <div class="profile-card">
+      ${s.foto?`<img src="${s.foto}" class="avatar-lg">`:`<div class="avatar avatar-lg" style="font-size:24px">${escapeHtml((s.nama||'?').slice(0,2).toUpperCase())}</div>`}
+      <h2>${escapeHtml(s.nama)}</h2>
+      <p class="muted-invert">No. induk ${escapeHtml(s.noInduk)} &middot; ${escapeHtml(s.kelas)||'-'}</p>
       <span class="tag ${s.program==='Takhossus'?'tag-takhossus':'tag-nontakhossus'}">${escapeHtml(s.program)||'-'}</span>
     </div>
-    <div class="grid2">
-      <div class="stat"><div class="num">${rupiah(s.saldo)}</div><div class="label">Saldo saat ini</div></div>
-      <div class="stat"><div class="num">${lastHafalan?`J${lastHafalan.juz} H${lastHafalan.halaman}`:'-'}</div><div class="label">Hafalan terakhir</div></div>
+
+    <div class="stat-list">
+      <button class="stat-item green" onclick="goPage('riwayat')">
+        <span class="icon-circle">&#128176;</span>
+        <span class="stat-text"><span class="num">${rupiah(s.saldo)}</span><span class="label">Saldo saat ini</span></span>
+        <span class="chev">&#8250;</span>
+      </button>
+      <button class="stat-item purple" onclick="goPage('hafalan')">
+        <span class="icon-circle">&#128214;</span>
+        <span class="stat-text"><span class="num">${lastHafalan?`Juz ${lastHafalan.juz} &middot; Hal. ${lastHafalan.halaman}`:'Belum ada data'}</span><span class="label">Hafalan terakhir</span></span>
+        <span class="chev">&#8250;</span>
+      </button>
+      <button class="stat-item amber" onclick="goPage('absensi')">
+        <span class="icon-circle">&#10003;</span>
+        <span class="stat-text"><span class="num">${abs.pct===null?'-':abs.pct+'%'}</span><span class="label">Kehadiran bulan ini${abs.total?` (${abs.hadir}/${abs.total})`:''}</span></span>
+        <span class="chev">&#8250;</span>
+      </button>
+      <button class="stat-item rose" onclick="goPage('tagihan')">
+        <span class="icon-circle">&#128179;</span>
+        <span class="stat-text"><span class="num">${tg.belum.length} tagihan</span><span class="label">Belum dibayar</span></span>
+        <span class="chev">&#8250;</span>
+      </button>
     </div>
-    <p class="muted" style="margin-top:10px">Data ini hasil sinkron terakhir. Untuk data terbaru, minta admin melakukan sinkron ulang.</p>
+
+    <p class="muted" style="margin-top:6px">Data ini hasil sinkron terakhir. Untuk data terbaru, minta admin melakukan sinkron ulang.</p>
   `;
 }
 
@@ -539,36 +617,61 @@ function renderInfo(){
   `;
 }
 
-/* ---------- SALDO ---------- */
-function renderSaldo(){
-  const s = mySantri();
-  document.getElementById('content').innerHTML = `
-    <h2>Saldo</h2>
-    <div class="card stat" style="text-align:center">
-      <div class="num" style="font-size:28px">${rupiah(s.saldo)}</div>
-      <div class="label">Saldo saat ini</div>
-    </div>
-  `;
+/* ---------- RIWAYAT (juga menggantikan tab Saldo yang dihapus) ---------- */
+let riwPeriode='bulan', riwFrom='', riwTo=todayStr(), riwJenis='semua';
+const LABEL_JENIS_RIWAYAT = {setoran:'Top Up', tarik:'Tarik Tunai', bayar:'Bayar (saldo)'};
+function setRiwPeriode(mode){
+  riwPeriode = mode;
+  if(mode!=='custom'){ const r=rentangPeriode(mode); riwFrom=r.dari; riwTo=r.sampai; }
+  renderRiwayat();
 }
-
-/* ---------- RIWAYAT ---------- */
-let riwFrom='', riwTo=todayStr();
 function renderRiwayat(){
-  if(!riwFrom){ riwFrom = geserTanggalStr(todayStr(), {hari:-30}); }
+  if(!riwFrom){ const r=rentangPeriode(riwPeriode); riwFrom=r.dari; riwTo=r.sampai; }
   const s = mySantri();
-  const labelJenis = {setoran:'Setoran', tarik:'Tarik Tunai', bayar:'Bayar (saldo)'};
-  const sd = DB.transaksiSaldo.filter(t=>t.santriId===s.id && t.tanggal>=riwFrom && t.tanggal<=riwTo)
-    .map(t=>({tanggal:t.tanggal, jenis:labelJenis[t.jenis]||t.jenis, jumlah:t.jenis==='setoran'?t.jumlah:-t.jumlah, ket:t.keterangan}));
+  // Hanya transaksi yang benar-benar memengaruhi saldo yang ditampilkan di sini
+  // (samakan dengan logika perhitungan saldo): 'bayar' dengan metode tunai tidak
+  // dihitung di sini karena tidak memotong saldo -- itu sudah tercatat sendiri
+  // di tabel "Belanja di Toko" di bawah. Tiap baris diberi "kategori" (setoran/
+  // tarik/bayar) supaya bisa disaring lewat dropdown Jenis Transaksi.
+  const sd = DB.transaksiSaldo.filter(t=>t.santriId===s.id && t.tanggal>=riwFrom && t.tanggal<=riwTo
+      && (t.jenis!=='bayar' || t.metode==='saldo' || !t.metode))
+    .map(t=>({tanggal:t.tanggal, jenis:LABEL_JENIS_RIWAYAT[t.jenis]||t.jenis, kategori:t.jenis, jumlah:t.jenis==='setoran'?t.jumlah:-t.jumlah, ket:t.keterangan}));
+  // Pembayaran iuran lewat saldo dikelompokkan sebagai "Bayar" juga di dropdown.
   const iu = DB.iuranDetail.filter(it=>it.tanggal>=riwFrom && it.tanggal<=riwTo && it.status==='lunas')
-    .map(it=>({tanggal:it.tglBayar||it.tanggal, jenis:'Iuran', jumlah:-it.jumlah, ket:it.keterangan}));
-  const all = [...sd, ...iu].sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+    .map(it=>({tanggal:it.tglBayar||it.tanggal, jenis:'Iuran', kategori:'bayar', jumlah:-it.jumlah, ket:it.keterangan}));
+  let all = [...sd, ...iu].sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
+  if(riwJenis!=='semua') all = all.filter(t=>t.kategori===riwJenis);
   const belanja = DB.transaksiToko.filter(t=>t.santriId===s.id && (t.createdAt||'').slice(0,10)>=riwFrom && (t.createdAt||'').slice(0,10)<=riwTo)
     .sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
   document.getElementById('content').innerHTML = `
-    <h2>Riwayat Transaksi</h2>
+    <h2>Riwayat &amp; Saldo</h2>
+    <div class="card stat green" style="text-align:center;margin-bottom:12px">
+      <div class="num" style="font-size:26px">${rupiah(s.saldo)}</div>
+      <div class="label">Saldo saat ini</div>
+    </div>
     <div class="card grid2">
+      <div>
+        <label>Periode</label>
+        <select onchange="setRiwPeriode(this.value)">
+          <option value="hari" ${riwPeriode==='hari'?'selected':''}>Hari ini</option>
+          <option value="pekan" ${riwPeriode==='pekan'?'selected':''}>Pekan ini</option>
+          <option value="bulan" ${riwPeriode==='bulan'?'selected':''}>Bulan ini</option>
+          <option value="custom" ${riwPeriode==='custom'?'selected':''}>Tanggal dari - sampai</option>
+        </select>
+      </div>
+      <div>
+        <label>Jenis Transaksi</label>
+        <select onchange="riwJenis=this.value; renderRiwayat()">
+          <option value="semua" ${riwJenis==='semua'?'selected':''}>Semua</option>
+          <option value="setoran" ${riwJenis==='setoran'?'selected':''}>Top Up</option>
+          <option value="bayar" ${riwJenis==='bayar'?'selected':''}>Bayar</option>
+          <option value="tarik" ${riwJenis==='tarik'?'selected':''}>Tarik Tunai</option>
+        </select>
+      </div>
+      ${riwPeriode==='custom'?`
       <div><label>Dari tanggal</label><input type="date" value="${riwFrom}" onchange="riwFrom=this.value; renderRiwayat()"></div>
       <div><label>Sampai tanggal</label><input type="date" value="${riwTo}" onchange="riwTo=this.value; renderRiwayat()"></div>
+      `:''}
     </div>
     <div class="card">
       ${all.length===0?'<p class="muted">Tidak ada transaksi pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Jenis</th><th>Keterangan</th><th>Nominal</th></tr>
@@ -644,6 +747,9 @@ function renderHafalan(){
   if(!hfFrom){ const r=rentangPeriode(hfMode); hfFrom=r.dari; hfTo=r.sampai; }
   const s = mySantri();
   const namaKegiatan = kid => (DB.kegiatan.find(k=>k.id===kid)||{}).nama || '-';
+  // Catatan: "Setoran 2" cuma nama lama yang dihapus dari tampilan -- data
+  // Murojaah (mengulang hafalan) sendiri tetap ditampilkan, diambil dari
+  // semua kegiatan murojaah (Murojaah 1/2/3, dst).
   const items = DB.hafalan.filter(h=>h.santriId===s.id && h.tanggal>=hfFrom && h.tanggal<=hfTo).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
   const murojaahItems = (DB.murojaah||[]).filter(m=>m.santriId===s.id && m.tanggal>=hfFrom && m.tanggal<=hfTo).sort((a,b)=>b.tanggal.localeCompare(a.tanggal));
   const tambah = items.length>=2 ? totalHalaman(items[items.length-1])-totalHalaman(items[0]) : 0;
@@ -660,11 +766,11 @@ function renderHafalan(){
       <canvas id="chartHafalan" width="600" height="200" style="width:100%;height:170px"></canvas>
     </div>
     <div class="card">
-      <div class="card-title">Riwayat Setoran (menambah hafalan baru)</div>
+      <div class="card-title">Riwayat Hafalan</div>
       ${items.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Halaman</th><th>Keterangan</th></tr>${items.slice().reverse().map(h=>`<tr><td>${h.tanggal}</td><td>${escapeHtml(namaKegiatan(h.kegiatanId))}</td><td>${h.juz}</td><td>${h.halaman}</td><td><span class="tag ${h.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(h.keterangan||'Lancar')}</span></td></tr>`).join('')}</table>`}
     </div>
     <div class="card">
-      <div class="card-title">Riwayat Setoran 2 / Murojaah (mengulang hafalan)</div>
+      <div class="card-title">Riwayat Murojaah</div>
       ${murojaahItems.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Cakupan</th><th>Keterangan</th></tr>${murojaahItems.map(m=>`<tr><td>${m.tanggal}</td><td>${escapeHtml(namaKegiatan(m.kegiatanId))}</td><td>${m.juz}</td><td>${escapeHtml(m.cakupan)}</td><td><span class="tag ${m.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(m.keterangan||'Lancar')}</span></td></tr>`).join('')}</table>`}
     </div>
   `;
@@ -697,24 +803,7 @@ function labelBulan(bln){
 }
 function renderTagihan(){
   const s = mySantri();
-
-  // Semua tagihan (SPP, dsb) milik santri ini, apa pun bulannya -- supaya tidak ada
-  // yang "hilang" hanya karena sudah dibuat lebih awal untuk bulan mendatang.
-  const semuaTagihan = DB.tagihan.filter(t=>t.santriId===s.id).map(t=>{
-    const jenis = DB.jenisTagihan.find(j=>j.id===t.jenisTagihanId);
-    const lbl = labelBulan(t.bulan);
-    return { nama: (jenis?jenis.nama:'Tagihan') + (lbl?` (${lbl})`:''), jumlah:t.jumlah, status:t.status, tglBayar:t.tglBayar, urut:t.bulan||'' };
-  });
-
-  // Iuran (insidental) milik santri ini -- RPC sudah filter per santri, jadi ambil semua
-  const semuaIuran = DB.iuranDetail.map(it=>{
-    const lbl = it.tanggal ? labelBulan(it.tanggal.slice(0,7)) : '';
-    return { nama:'Iuran' + (it.keterangan?(': '+it.keterangan):'') + (lbl?` (${lbl})`:''), jumlah:it.jumlah, status:it.status, tglBayar:it.tglBayar, urut:it.tanggal||'' };
-  });
-
-  const semua = [...semuaTagihan, ...semuaIuran];
-  const belum = semua.filter(r=>r.status==='belum').sort((a,b)=>a.urut.localeCompare(b.urut));
-  const lunas = semua.filter(r=>r.status==='lunas').sort((a,b)=>b.urut.localeCompare(a.urut));
+  const { semua, belum, lunas } = dataTagihanIuran(s);
 
   document.getElementById('content').innerHTML = `
     <h2>Tagihan &amp; Iuran</h2>

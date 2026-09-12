@@ -1,11 +1,24 @@
 :root{
   --green-900:#1f3327; --green-700:#2f4d3a; --green-600:#3b5940; --green-100:#e4ece3;
-  --bg:#f4f5f0; --card:#ffffff; --border:#dcded6; --text:#232821; --muted:#6b7268;
+  --bg:#f4f5f0; --card:#ffffff; --border:#e5e7e0; --text:#232821; --muted:#6b7268;
   --danger:#a33; --amber:#8a6d13; --radius:12px;
+
+  /* ===== Palet warna tambahan (2026) untuk tampilan lebih segar & "hidup" =====
+     Tiap kategori data (saldo/hafalan/absensi/tagihan) dapat warna gradasi
+     sendiri, dipakai di kartu ringkasan Beranda & elemen ber-aksen lainnya. */
+  --grad-green: linear-gradient(135deg,#34d399,#059669);
+  --grad-blue: linear-gradient(135deg,#38bdf8,#2563eb);
+  --grad-purple: linear-gradient(135deg,#a78bfa,#7c3aed);
+  --grad-amber: linear-gradient(135deg,#fbbf24,#d97706);
+  --grad-rose: linear-gradient(135deg,#fb7185,#e11d48);
+  --grad-brand: linear-gradient(135deg,#2f4d3a,#1f3327);
+  --shadow-sm: 0 1px 3px rgba(35,40,33,.06), 0 1px 2px rgba(35,40,33,.05);
+  --shadow-md: 0 8px 24px rgba(31,51,39,.12);
+  --radius-lg:18px;
 }
 *{box-sizing:border-box;}
 html{height:100%;overflow-x:hidden;}
-body{margin:0;min-height:100%;overflow-x:hidden;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
+body{margin:0;min-height:100%;overflow-x:hidden;font-family:'Plus Jakarta Sans',-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;}
 /* min-height:100vh di sebagian browser mobile (terutama landscape) dihitung
    dari tinggi viewport SAAT toolbar/address bar sedang tersembunyi. Begitu
    toolbar muncul lagi (mis. waktu discroll ke atas), tinggi 100vh jadi tidak
@@ -19,14 +32,20 @@ h1,h2,h3{font-weight:600;margin:0 0 4px;}
 button{cursor:pointer;font-family:inherit;}
 
 /* Login */
-#loginScreen{display:flex;align-items:center;justify-content:center;background:var(--green-900);padding:24px;}
-.login-box{background:var(--card);padding:28px 24px;border-radius:16px;width:100%;max-width:320px;text-align:center;}
-.login-logo{width:72px;height:72px;border-radius:50%;object-fit:cover;margin-bottom:8px;}
+#loginScreen{display:flex;align-items:center;justify-content:center;background:var(--grad-brand);padding:24px;position:relative;overflow:hidden;}
+/* Dua lingkaran gradasi transparan di belakang kartu login, sekadar hiasan
+   halus supaya latar tidak polos rata satu warna -- tidak mengganggu
+   keterbacaan karena ada di belakang kartu putih & blur besar. */
+#loginScreen::before, #loginScreen::after{content:'';position:absolute;border-radius:50%;filter:blur(40px);opacity:.35;pointer-events:none;}
+#loginScreen::before{width:260px;height:260px;background:var(--grad-green);top:-80px;right:-60px;}
+#loginScreen::after{width:220px;height:220px;background:var(--grad-purple);bottom:-70px;left:-60px;}
+.login-box{position:relative;background:var(--card);padding:30px 24px;border-radius:22px;width:100%;max-width:320px;text-align:center;box-shadow:var(--shadow-md);}
+.login-logo{width:72px;height:72px;border-radius:50%;object-fit:cover;margin-bottom:8px;box-shadow:0 0 0 4px var(--green-100);}
 .login-box label{display:block;text-align:left;font-size:13px;margin:14px 0 4px;color:var(--muted);}
 .login-box select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-size:15px;}
-.btn-primary{width:100%;margin-top:20px;padding:12px;border:none;border-radius:8px;background:var(--green-600);color:#fff;font-size:15px;font-weight:600;}
-.btn-primary:active{background:var(--green-700);}
-.btn-scan{width:100%;margin-top:10px;padding:11px;border-radius:8px;border:1px solid var(--green-600);background:#fff;color:var(--green-600);font-size:14px;font-weight:600;}
+.btn-primary{width:100%;margin-top:20px;padding:13px;border:none;border-radius:12px;background:var(--grad-green);color:#fff;font-size:15px;font-weight:700;box-shadow:0 6px 16px rgba(5,150,105,.28);}
+.btn-primary:active{filter:brightness(.94);}
+.btn-scan{width:100%;margin-top:10px;padding:11px;border-radius:12px;border:1px solid var(--green-600);background:#fff;color:var(--green-600);font-size:14px;font-weight:600;}
 .btn-scan:active{background:var(--green-100);}
 
 /* Toggle lihat/sembunyikan isian login */
@@ -41,9 +60,9 @@ button{cursor:pointer;font-family:inherit;}
 #torchBtn.on{background:var(--green-600);color:#fff;border-color:var(--green-600);}
 
 /* Top bar */
-.topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;}
-.topbar-logo{width:32px;height:32px;border-radius:50%;object-fit:cover;}
-.topbar-title{font-weight:600;font-size:15px;}
+.topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10;box-shadow:var(--shadow-sm);}
+.topbar-logo{width:32px;height:32px;border-radius:50%;object-fit:cover;box-shadow:0 0 0 2px var(--green-100);}
+.topbar-title{font-weight:700;font-size:15px;}
 .topbar-sub{font-size:12px;color:var(--muted);}
 
 /* Mode landscape (HP dimiringkan, tinggi layar sempit): topbar dulunya
@@ -109,9 +128,10 @@ button{cursor:pointer;font-family:inherit;}
   padding-left:env(safe-area-inset-left, 0);
   padding-right:env(safe-area-inset-right, 0);
 }
-.bottomnav .navitem{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 2px;background:none;border:none;color:var(--muted);font-size:10px;}
+.bottomnav .navitem{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 2px;background:none;border:none;color:var(--muted);font-size:10px;font-weight:600;}
 .bottomnav .navitem.active{color:var(--green-600);}
 .bottomnav .navitem .ic{font-size:18px;}
+.bottomnav .navitem.active .ic{transform:translateY(-1px);}
 .navitem .ic svg{display:block;}
 .bottomnav .navitem.navitem-logout{color:var(--danger);}
 
@@ -141,20 +161,54 @@ button{cursor:pointer;font-family:inherit;}
     height:100%;
     overflow-y:auto;
   }
-  .sidebar .navitem{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;border:none;background:none;text-align:left;color:var(--text);font-size:14px;}
-  .sidebar .navitem.active{background:var(--green-100);color:var(--green-700);font-weight:600;}
+  .sidebar .navitem{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:none;background:none;text-align:left;color:var(--text);font-size:14px;font-weight:500;}
+  .sidebar .navitem.active{background:var(--green-100);color:var(--green-700);font-weight:700;}
   .sidebar .navitem.navitem-logout{margin-top:auto;color:var(--danger);border-top:1px solid var(--border);border-radius:0;padding-top:14px;}
   .content{padding:20px;height:100%;}
 }
 
 /* Cards / generic UI */
-.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px;}
-.card-title{font-size:14px;font-weight:600;margin-bottom:10px;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;margin-bottom:12px;box-shadow:var(--shadow-sm);}
+.card-title{font-size:14px;font-weight:700;margin-bottom:10px;}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px;}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
-.stat{background:var(--green-100);border-radius:10px;padding:10px 12px;}
-.stat .num{font-size:20px;font-weight:700;color:var(--green-700);}
+.stat{background:var(--green-100);border-radius:14px;padding:12px 14px;}
+.stat .num{font-size:20px;font-weight:800;color:var(--green-700);}
 .stat .label{font-size:12px;color:var(--muted);}
+/* Kartu "stat" berwarna solid (dipakai mis. kotak Saldo di atas tab Riwayat):
+   teks & label otomatis jadi putih di atas gradasi. */
+.stat.green{background:var(--grad-green);}
+.stat.blue{background:var(--grad-blue);}
+.stat.purple{background:var(--grad-purple);}
+.stat.amber{background:var(--grad-amber);}
+.stat.rose{background:var(--grad-rose);}
+.stat.green .num, .stat.blue .num, .stat.purple .num, .stat.amber .num, .stat.rose .num{color:#fff;}
+.stat.green .label, .stat.blue .label, .stat.purple .label, .stat.amber .label, .stat.rose .label{color:rgba(255,255,255,.85);}
+
+/* Kartu profil santri di atas Beranda -- gradasi hijau tua, foto/inisial di
+   tengah, dipisah dari daftar ringkasan (stat-list) di bawahnya. */
+.profile-card{background:var(--grad-brand);color:#fff;border-radius:var(--radius-lg);padding:24px 18px 20px;text-align:center;box-shadow:var(--shadow-md);margin-bottom:14px;}
+.profile-card h2{color:#fff;margin-top:12px;}
+.profile-card .muted-invert{color:rgba(255,255,255,.72);font-size:13px;margin-bottom:8px;}
+.avatar-lg{width:84px;height:84px;border-radius:50%;object-fit:cover;margin:0 auto;border:3px solid rgba(255,255,255,.35);display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.18);color:#fff;font-weight:700;}
+
+/* Daftar ringkasan di Beranda (saldo/hafalan/absensi/tagihan) -- tersusun ke
+   bawah (satu kolom penuh), tiap baris jadi tombol yang bisa diketuk untuk
+   loncat ke tab detailnya. Warna icon-circle beda per kategori supaya
+   sekilas mata langsung bisa membedakan jenis datanya. */
+.stat-list{display:flex;flex-direction:column;gap:10px;}
+.stat-item{display:flex;align-items:center;gap:12px;width:100%;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:13px 14px;box-shadow:var(--shadow-sm);text-align:left;font:inherit;color:var(--text);}
+.stat-item:active{transform:scale(.98);}
+.stat-item .icon-circle{width:44px;height:44px;flex-shrink:0;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:19px;}
+.stat-item.green .icon-circle{background:var(--grad-green);}
+.stat-item.blue .icon-circle{background:var(--grad-blue);}
+.stat-item.purple .icon-circle{background:var(--grad-purple);}
+.stat-item.amber .icon-circle{background:var(--grad-amber);}
+.stat-item.rose .icon-circle{background:var(--grad-rose);}
+.stat-item .stat-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.stat-item .stat-text .num{font-size:15.5px;font-weight:700;}
+.stat-item .stat-text .label{font-size:12px;color:var(--muted);}
+.stat-item .chev{color:var(--border);font-size:20px;flex-shrink:0;}
 
 .list-item{display:flex;align-items:center;gap:10px;padding:10px 6px;border-bottom:1px solid var(--border);}
 .list-item:last-child{border-bottom:none;}
@@ -162,10 +216,10 @@ button{cursor:pointer;font-family:inherit;}
 .list-item .name{font-weight:600;font-size:14px;}
 .list-item .sub{font-size:12px;color:var(--muted);}
 
-input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:#fff;color:var(--text);}
-label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;}
-.btn{padding:9px 14px;border-radius:8px;border:1px solid var(--border);background:#fff;font-size:13px;font-weight:600;color:var(--text);}
-.btn-accent{background:var(--green-600);color:#fff;border-color:var(--green-600);}
+input,select,textarea{width:100%;padding:10px 11px;border:1px solid var(--border);border-radius:10px;font-size:14px;background:#fff;color:var(--text);font-family:inherit;}
+label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:600;}
+.btn{padding:9px 14px;border-radius:10px;border:1px solid var(--border);background:#fff;font-size:13px;font-weight:600;color:var(--text);}
+.btn-accent{background:var(--grad-green);color:#fff;border-color:transparent;}
 .btn-danger{color:var(--danger);border-color:var(--danger);}
 .btn-sm{padding:6px 10px;font-size:12px;}
 .btn-row{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
@@ -184,8 +238,8 @@ label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px;}
 .chip-group{display:flex;flex-wrap:wrap;gap:6px;}
 
 .tabs{display:flex;gap:6px;margin-bottom:12px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;}
-.tab{padding:7px 14px;border-radius:20px;border:1px solid var(--border);background:#fff;font-size:13px;white-space:nowrap;flex-shrink:0;}
-.tab.active{background:var(--green-600);color:#fff;border-color:var(--green-600);}
+.tab{padding:7px 14px;border-radius:20px;border:1px solid var(--border);background:#fff;font-size:13px;font-weight:600;white-space:nowrap;flex-shrink:0;color:var(--text);}
+.tab.active{background:var(--grad-green);color:#fff;border-color:transparent;box-shadow:0 3px 10px rgba(5,150,105,.25);}
 
 /* Tabel bisa jadi lebih lebar dari layar (banyak kolom, mis. Riwayat/Tagihan).
    Dibungkus scroll horizontal di dalam .card-nya sendiri supaya kolom yang
