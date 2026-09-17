@@ -29,8 +29,8 @@
      supaya perilakunya tetap sama seperti sebelumnya: sesi cuma bertahan
      selama tab/aplikasi terbuka (ME di sessionStorage), bukan tersimpan
      permanen di HP -- penting kalau HP-nya dipakai bergantian antar wali. */
-const SUPABASE_URL = 'https://hvivddbhacoppkbtiqpe.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_BTFxSTrt1vM1seoQaXG_7g_mqYo5aqq';
+const SUPABASE_URL = 'https://liivvueodribjwipmbrl.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_KKSw-wparSwNbIvR9wHhyQ_Pc1NdcKG';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false }
 });
@@ -220,7 +220,7 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       return false;
     }
 
-    const { data: s, error: errSantri } = await sb.from('santri').select('*').single();
+    const { data: s, error: errSantri } = await sb.from('santri').select('id,nama,no_induk,foto_url,tetala,alamat,tanggal_masuk,jenis_kelamin,nama_ayah,nama_ibu,nama_wali,foto_wali,kode_wali,kelas,kamar,no_hp_wali,program,hafalan_awal').single();
     if(errSantri || !s){
       if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
       return false;
@@ -237,15 +237,15 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       { data: hafalanRows }, { data: murojaahRows }, { data: saldoRows }, { data: tokoRows },
       { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows }
     ] = await Promise.all([
-      sb.from('mahram').select('*').eq('santri_id', s.id),
-      sb.from('kegiatan').select('*').eq('aktif', true),
-      sb.from('absensi').select('*').eq('santri_id', s.id),
-      sb.from('hafalan').select('*').eq('santri_id', s.id).order('tanggal'),
-      sb.from('murojaah').select('*').eq('santri_id', s.id).order('tanggal'),
-      sb.from('transaksi_saldo').select('*').eq('santri_id', s.id).eq('status', 'aktif'),
-      sb.from('transaksi_toko').select('*').eq('santri_id', s.id),
-      sb.from('tagihan').select('*').eq('santri_id', s.id),
-      sb.from('jenis_tagihan').select('*'),
+      sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url').eq('santri_id', s.id),
+      sb.from('kegiatan').select('id,nama,program_khusus').eq('aktif', true),
+      sb.from('absensi').select('id,santri_id,kegiatan_id,tanggal,status').eq('santri_id', s.id),
+      sb.from('hafalan').select('id,santri_id,tanggal,juz,halaman_sampai,kegiatan_id,keterangan').eq('santri_id', s.id).order('tanggal'),
+      sb.from('murojaah').select('id,santri_id,kegiatan_id,tanggal,juz,cakupan,keterangan').eq('santri_id', s.id).order('tanggal'),
+      sb.from('transaksi_saldo').select('id,santri_id,jenis,jumlah,keterangan,tanggal,metode').eq('santri_id', s.id).eq('status', 'aktif'),
+      sb.from('transaksi_toko').select('id,santri_id,items,total,metode,status_bayar,created_at').eq('santri_id', s.id),
+      sb.from('tagihan').select('id,santri_id,jenis_tagihan_id,bulan,jumlah,status,tgl_bayar').eq('santri_id', s.id),
+      sb.from('jenis_tagihan').select('id,nama'),
       sb.from('iuran_detail').select('id, santri_id, jumlah, status, tgl_bayar, iuran(tanggal, keterangan)').eq('santri_id', s.id)
     ]);
 
