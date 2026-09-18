@@ -220,7 +220,7 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       return false;
     }
 
-    const { data: s, error: errSantri } = await sb.from('santri').select('id,nama,no_induk,foto_url,tetala,alamat,tanggal_masuk,jenis_kelamin,nama_ayah,nama_ibu,nama_wali,foto_wali,kode_wali,kelas,kamar,no_hp_wali,program,hafalan_awal').single();
+    const { data: s, error: errSantri } = await sb.from('santri').select('id,nama,no_induk,foto_url,foto_thumb_url,tetala,alamat,tanggal_masuk,jenis_kelamin,nama_ayah,nama_ibu,nama_wali,foto_wali,foto_wali_thumb_url,kode_wali,kelas,kamar,no_hp_wali,program,hafalan_awal').single();
     if(errSantri || !s){
       if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
       return false;
@@ -237,7 +237,7 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       { data: hafalanRows }, { data: murojaahRows }, { data: saldoRows }, { data: tokoRows },
       { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows }
     ] = await Promise.all([
-      sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url').eq('santri_id', s.id),
+      sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url,foto_thumb_url').eq('santri_id', s.id),
       sb.from('kegiatan').select('id,nama,program_khusus').eq('aktif', true),
       sb.from('absensi').select('id,santri_id,kegiatan_id,tanggal,status').eq('santri_id', s.id),
       sb.from('hafalan').select('id,santri_id,tanggal,juz,halaman_sampai,kegiatan_id,keterangan').eq('santri_id', s.id).order('tanggal'),
@@ -251,13 +251,16 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
 
     // Bentuk ulang jadi persis nama field yang dipakai di seluruh app.js ini
     // (sebelumnya dibentuk oleh RPC data_wali_santri di sisi server; sekarang dibentuk di sini).
-    const mahram = (mahramRows||[]).map(m=>({ id:m.id, nama:m.nama, hubungan:m.hubungan||'', hp:m.no_hp||'', foto:m.foto_url||'' }));
+    // Dipakai versi thumbnail (foto_thumb_url / foto_wali_thumb_url) supaya avatar kecil
+    // di app ini tidak menarik file full-size dari storage -- ini salah satu penyebab
+    // egress v2 membengkak. Fallback ke foto_url/foto_wali kalau thumbnail-nya belum ada.
+    const mahram = (mahramRows||[]).map(m=>({ id:m.id, nama:m.nama, hubungan:m.hubungan||'', hp:m.no_hp||'', foto:m.foto_thumb_url||m.foto_url||'' }));
     DB = {
       santri: [{
-        id: s.id, nama: s.nama, noInduk: s.no_induk, foto: s.foto_url||'',
+        id: s.id, nama: s.nama, noInduk: s.no_induk, foto: s.foto_thumb_url||s.foto_url||'',
         tetala: s.tetala||'', alamat: s.alamat||'', tglMasuk: s.tanggal_masuk,
         jenisKelamin: s.jenis_kelamin||'L', namaAyah: s.nama_ayah||'', namaIbu: s.nama_ibu||'',
-        namaWali: s.nama_wali||'', fotoWali: s.foto_wali||'', kodeWali: s.kode_wali,
+        namaWali: s.nama_wali||'', fotoWali: s.foto_wali_thumb_url||s.foto_wali||'', kodeWali: s.kode_wali,
         kelas: s.kelas||'', kamar: s.kamar||'', hpWali: s.no_hp_wali||'',
         program: s.program||'Non-Takhossus', hafalanAwal: s.hafalan_awal||0,
         mahram
