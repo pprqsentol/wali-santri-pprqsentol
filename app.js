@@ -110,9 +110,15 @@ function dalamCamel(obj){
   return obj;
 }
 
-const CACHE_KEY = 'wali_cache_v1'; // cadangan tampilan terakhir saja (bukan sumber data utama), supaya tetap bisa dilihat sebentar walau lagi tidak ada internet
-const SYNC_TS_KEY = 'wali_last_sync_v1'; // kapan terakhir kali BERHASIL narik data lengkap dari Supabase
-const MIN_SYNC_MS = 3 * 60 * 1000; // 3 menit -- jarak minimal antar tarikan data lengkap
+const CACHE_KEY = 'wali_cache_v2'; // cadangan tampilan terakhir saja (bukan sumber data utama), supaya tetap bisa dilihat sebentar walau lagi tidak ada internet
+const SYNC_TS_KEY = 'wali_last_sync_v2'; // kapan terakhir kali BERHASIL narik data lengkap dari Supabase -- juga dipakai sebagai "cursor" delta sync (updated_at >= ini)
+const FULL_SYNC_TS_KEY = 'wali_last_full_sync_v2'; // kapan terakhir kali sync PENUH (bukan delta) berhasil
+const MIN_SYNC_MS = 3 * 60 * 1000; // 3 menit -- jarak minimal antar sync (delta ataupun penuh)
+const FULL_RESYNC_MS = 6 * 60 * 60 * 1000; // 6 jam -- jaring pengaman: delta sync (berdasar updated_at) tidak
+  // bisa tahu kalau ada baris yang betul-betul DIHAPUS (bukan diedit) di server, atau baris yang
+  // status-nya berubah sampai keluar dari filter (misal transaksi_saldo status aktif->dibatalkan).
+  // Supaya kasus itu tidak "nyangkut" selamanya di HP, tiap maksimal 6 jam dipaksa sync PENUH lagi
+  // (ganti total, bukan gabung) yang otomatis membuang baris yang sudah tidak relevan.
 function simpanCache(db){ try{ localStorage.setItem(CACHE_KEY, JSON.stringify(db)); localStorage.setItem(SYNC_TS_KEY, String(Date.now())); }catch(e){} }
 function ambilCache(){ try{ return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); }catch(e){ return null; } }
 function cacheMasihSegar(){
@@ -121,8 +127,20 @@ function cacheMasihSegar(){
     return t > 0 && (Date.now() - t) < MIN_SYNC_MS;
   }catch(e){ return false; }
 }
+function waktuSyncTerakhirTs(){ try{ return parseInt(localStorage.getItem(SYNC_TS_KEY)||'0', 10); }catch(e){ return 0; } }
+function waktuFullSyncTerakhirTs(){ try{ return parseInt(localStorage.getItem(FULL_SYNC_TS_KEY)||'0', 10); }catch(e){ return 0; } }
+function catatFullSync(){ try{ localStorage.setItem(FULL_SYNC_TS_KEY, String(Date.now())); }catch(e){} }
+// Gabungkan baris "baru" (hasil delta) ke daftar "lama" (upsert by id), lalu buang baris yang
+// tanggalnya sudah keluar dari jendela 30 hari (jendela ini geser tiap hari, jadi perlu di-trim
+// ulang tiap sync walau tidak ada perubahan data apapun).
+function gabungTrim(lama, baru, cutoffTgl, kolomTgl){
+  const map = new Map();
+  (lama||[]).forEach(x=>{ if(x && x.id!=null) map.set(x.id, x); });
+  (baru||[]).forEach(x=>{ if(x && x.id!=null) map.set(x.id, x); });
+  return Array.from(map.values()).filter(x => String(x[kolomTgl]||'').slice(0,10) >= cutoffTgl);
+}
 
-let DB = { santri: [], mahram: [], kegiatan: [], absensi: [], hafalan: [], murojaah: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [] };
+let DB = { santri: [], mahram: [], kegiatan: [], absensi: [], hafalan: [], murojaah: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [], rekapAbsensi: [], rekapHafalan: [], rekapMurojaah: [], rekapSaldo: [], rekapToko: [] };
 let ME = JSON.parse(sessionStorage.getItem('wali_session') || 'null'); // {noInduk, kodeWali} -- hanya untuk sesi berjalan, tidak dicadangkan ke localStorage
 
 // Urutan tab: beranda, info, hafalan, absensi, tagihan, riwayat -- tab Saldo
@@ -156,6 +174,17 @@ function geserTanggalStr(str, opsi){
   if(opsi.hari) dt.setUTCDate(dt.getUTCDate() + opsi.hari);
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${String(dt.getUTCDate()).padStart(2,'0')}`;
 }
+// Label bulan dari kolom 'bulan' hasil view rekap_*_bulanan (formatnya date "YYYY-MM-DD",
+// selalu tanggal 1) -- beda dari labelBulan() di bawah yang untuk kolom tagihan (string "YYYY-MM").
+function labelBulanDate(tgl){
+  if(!tgl) return '-';
+  try{ return new Date(tgl+'T00:00:00').toLocaleDateString('id-ID',{month:'long', year:'numeric'}); }
+  catch(e){ return tgl; }
+}
+// Kartu keterangan yang dipasang di atas tabel rekap bulanan, supaya wali paham kenapa
+// data lama cuma ringkasan (bukan bug/data hilang).
+const KET_REKAP_BULANAN = `<p class="muted" style="margin:6px 0 10px">Detail harian tersedia untuk 30 hari terakhir. Untuk periode yang lebih lama, ditampilkan ringkasan per bulan berikut.</p>`;
+
 function rupiah(n){ return 'Rp ' + (n||0).toLocaleString('id-ID'); }
 function totalHalaman(h){ return (h.juz-1)*20 + h.halaman; }
 
@@ -246,24 +275,61 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
     // sebagai murojaah), sudah dicek langsung ke Supabase kolomnya cocok
     // (juz, cakupan, keterangan, tanggal) dan RLS-nya benar (wali cuma lihat
     // punya anaknya sendiri lewat policy wali_lihat_murojaah_anak_sendiri).
+    // Detail lengkap cuma untuk 30 hari terakhir -- lebih lama dari itu, wali tetap bisa
+    // lihat datanya tapi dalam bentuk RINGKASAN PER BULAN (lewat view rekap_*_bulanan di
+    // Supabase), bukan detail satu-satu lagi. Ini permintaan eksplisit user untuk memangkas
+    // egress: riwayat absensi/hafalan/murojaah/transaksi terus bertambah tiap hari tanpa
+    // batas kalau ditarik detail penuh setiap kali sinkron.
+    const cutoffTgl = geserTanggalStr(todayStr(), { hari: -30 });
+
+    // basis = data lokal yang sudah ada (dari cache tersimpan, atau dari DB di memori kalau
+    // baru saja sync di sesi ini) -- dipakai sebagai dasar gabungan kalau sync ini DELTA.
+    const basis = ambilCache() || DB;
+    const cursorTs = waktuSyncTerakhirTs();
+    const perluFull = !waktuFullSyncTerakhirTs() || (Date.now() - waktuFullSyncTerakhirTs() > FULL_RESYNC_MS);
+    const cursorIso = (!perluFull && cursorTs) ? new Date(cursorTs).toISOString() : null;
+
+    // 5 query volume terbesar (absensi/hafalan/murojaah/transaksi_saldo/transaksi_toko) dibuat
+    // sebagai builder dulu, baru ditambah filter updated_at KALAU ini sync delta -- supaya cuma
+    // baris yang baru dibuat/diedit sejak sync terakhir yang ditarik, bukan seluruh isi tabel lagi.
+    let qAbsensi = sb.from('absensi').select('id,santri_id,kegiatan_id,tanggal,status').eq('santri_id', s.id).gte('tanggal', cutoffTgl);
+    let qHafalan = sb.from('hafalan').select('id,santri_id,tanggal,juz,halaman_sampai,kegiatan_id,keterangan').eq('santri_id', s.id).gte('tanggal', cutoffTgl).order('tanggal');
+    let qMurojaah = sb.from('murojaah').select('id,santri_id,kegiatan_id,tanggal,juz,cakupan,keterangan').eq('santri_id', s.id).gte('tanggal', cutoffTgl).order('tanggal');
+    let qSaldo = sb.from('transaksi_saldo').select('id,santri_id,jenis,jumlah,keterangan,tanggal,metode').eq('santri_id', s.id).eq('status', 'aktif').gte('tanggal', cutoffTgl);
+    // items_ringkas = generated column di Supabase, cuma berisi {nama_produk,qty} per barang
+    // (bukan produk_id/harga_beli/harga_jual yang tidak pernah dipakai di app ini)
+    let qToko = sb.from('transaksi_toko').select('id,santri_id,items:items_ringkas,total,metode,status_bayar,created_at').eq('santri_id', s.id).gte('created_at', cutoffTgl);
+    if(cursorIso){
+      qAbsensi = qAbsensi.gte('updated_at', cursorIso);
+      qHafalan = qHafalan.gte('updated_at', cursorIso);
+      qMurojaah = qMurojaah.gte('updated_at', cursorIso);
+      qSaldo = qSaldo.gte('updated_at', cursorIso);
+      qToko = qToko.gte('updated_at', cursorIso);
+    }
+
     const [
       { data: mahramRows }, { data: kegiatanRows }, { data: absensiRows },
       { data: hafalanRows }, { data: murojaahRows }, { data: saldoRows }, { data: tokoRows },
-      { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows }
+      { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows },
+      { data: saldoView },
+      { data: rekapAbsensiRows }, { data: rekapHafalanRows }, { data: rekapMurojaahRows },
+      { data: rekapSaldoRows }, { data: rekapTokoRows }
     ] = await Promise.all([
       sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url,foto_thumb_url').eq('santri_id', s.id),
       sb.from('kegiatan').select('id,nama,program_khusus').eq('aktif', true),
-      sb.from('absensi').select('id,santri_id,kegiatan_id,tanggal,status').eq('santri_id', s.id),
-      sb.from('hafalan').select('id,santri_id,tanggal,juz,halaman_sampai,kegiatan_id,keterangan').eq('santri_id', s.id).order('tanggal'),
-      sb.from('murojaah').select('id,santri_id,kegiatan_id,tanggal,juz,cakupan,keterangan').eq('santri_id', s.id).order('tanggal'),
-      sb.from('transaksi_saldo').select('id,santri_id,jenis,jumlah,keterangan,tanggal,metode').eq('santri_id', s.id).eq('status', 'aktif'),
-      // items_ringkas = generated column di Supabase, cuma berisi {nama_produk,qty} per barang
-      // (bukan produk_id/harga_beli/harga_jual yang tidak pernah dipakai di app ini -- lumayan
-      // memangkas ukuran respons karena riwayat belanja biasanya baris terbanyak per santri)
-      sb.from('transaksi_toko').select('id,santri_id,items:items_ringkas,total,metode,status_bayar,created_at').eq('santri_id', s.id),
+      qAbsensi, qHafalan, qMurojaah, qSaldo, qToko,
       sb.from('tagihan').select('id,santri_id,jenis_tagihan_id,bulan,jumlah,status,tgl_bayar').eq('santri_id', s.id),
       sb.from('jenis_tagihan').select('id,nama'),
-      sb.from('iuran_detail').select('id, santri_id, jumlah, status, tgl_bayar, iuran(tanggal, keterangan)').eq('santri_id', s.id)
+      sb.from('iuran_detail').select('id, santri_id, jumlah, status, tgl_bayar, iuran(tanggal, keterangan)').eq('santri_id', s.id),
+      // Saldo SEKARANG dihitung server-side (view saldo_santri, sama seperti dipakai Aplikasi
+      // Toko/Kasir) -- bukan lagi dijumlah dari transaksi_saldo di JS, karena transaksi_saldo
+      // yang ditarik sekarang cuma 30 hari terakhir (tidak cukup buat hitung total saldo).
+      sb.from('saldo_santri').select('saldo').eq('santri_id', s.id).maybeSingle(),
+      sb.from('rekap_absensi_bulanan').select('bulan,hadir,izin,sakit,alpha,total').eq('santri_id', s.id).order('bulan', { ascending: false }),
+      sb.from('rekap_hafalan_bulanan').select('bulan,jumlah_setoran,juz_akhir,halaman_akhir').eq('santri_id', s.id).order('bulan', { ascending: false }),
+      sb.from('rekap_murojaah_bulanan').select('bulan,jumlah_setoran,juz_terakhir').eq('santri_id', s.id).order('bulan', { ascending: false }),
+      sb.from('rekap_saldo_bulanan').select('bulan,jenis,jumlah_transaksi,total_nominal').eq('santri_id', s.id).order('bulan', { ascending: false }),
+      sb.from('rekap_toko_bulanan').select('bulan,jumlah_transaksi,total_belanja').eq('santri_id', s.id).order('bulan', { ascending: false })
     ]);
 
     // Bentuk ulang jadi persis nama field yang dipakai di seluruh app.js ini
@@ -286,38 +352,65 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       kegiatan: (kegiatanRows||[]).map(k=>({ id:k.id, nama:k.nama, programKhusus:k.program_khusus })),
       // status mentah di tabel absensi berupa teks ('Hadir'/'Izin'/dst), disamakan ke kode
       // singkat h/i/a persis seperti yang dulu dilakukan RPC data_wali_santri.
-      absensi: (absensiRows||[]).map(a=>({
-        id:a.id, santriId:a.santri_id, kegiatanId:a.kegiatan_id, tanggal:a.tanggal,
-        status: a.status==='Hadir' ? 'h' : (a.status==='Izin' ? 'i' : 'a')
-      })),
-      hafalan: (hafalanRows||[]).map(h=>({ id:h.id, santriId:h.santri_id, tanggal:h.tanggal, juz:h.juz, halaman:h.halaman_sampai, kegiatanId:h.kegiatan_id||null, keterangan:h.keterangan||'Lancar' })),
-      murojaah: (murojaahRows||[]).map(m=>({ id:m.id, santriId:m.santri_id, kegiatanId:m.kegiatan_id, tanggal:m.tanggal, juz:m.juz, cakupan:m.cakupan, keterangan:m.keterangan||'Lancar' })),
-      transaksiSaldo: (saldoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenis:t.jenis, jumlah:t.jumlah, keterangan:t.keterangan, tanggal:t.tanggal, metode:t.metode })),
-      transaksiToko: (tokoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, items:t.items, total:t.total, metode:t.metode, statusBayar:t.status_bayar, createdAt:t.created_at })),
+      // Kalau ini sync DELTA: baris hasil query cuma yang berubah sejak sync terakhir, jadi
+      // digabung (upsert by id) dengan data lama, bukan menimpa total -- kalau FULL: langsung
+      // dipakai apa adanya (menimpa total), sekalian jadi titik "reset" yang membuang baris
+      // yang sudah dihapus/berubah status di server (lihat penjelasan FULL_RESYNC_MS di atas).
+      absensi: (()=>{
+        const barus = (absensiRows||[]).map(a=>({
+          id:a.id, santriId:a.santri_id, kegiatanId:a.kegiatan_id, tanggal:a.tanggal,
+          status: a.status==='Hadir' ? 'h' : (a.status==='Izin' ? 'i' : 'a')
+        }));
+        return perluFull ? barus : gabungTrim(basis.absensi, barus, cutoffTgl, 'tanggal');
+      })(),
+      hafalan: (()=>{
+        const barus = (hafalanRows||[]).map(h=>({ id:h.id, santriId:h.santri_id, tanggal:h.tanggal, juz:h.juz, halaman:h.halaman_sampai, kegiatanId:h.kegiatan_id||null, keterangan:h.keterangan||'Lancar' }));
+        return perluFull ? barus : gabungTrim(basis.hafalan, barus, cutoffTgl, 'tanggal');
+      })(),
+      murojaah: (()=>{
+        const barus = (murojaahRows||[]).map(m=>({ id:m.id, santriId:m.santri_id, kegiatanId:m.kegiatan_id, tanggal:m.tanggal, juz:m.juz, cakupan:m.cakupan, keterangan:m.keterangan||'Lancar' }));
+        return perluFull ? barus : gabungTrim(basis.murojaah, barus, cutoffTgl, 'tanggal');
+      })(),
+      transaksiSaldo: (()=>{
+        const barus = (saldoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenis:t.jenis, jumlah:t.jumlah, keterangan:t.keterangan, tanggal:t.tanggal, metode:t.metode }));
+        return perluFull ? barus : gabungTrim(basis.transaksiSaldo, barus, cutoffTgl, 'tanggal');
+      })(),
+      transaksiToko: (()=>{
+        const barus = (tokoRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, items:t.items, total:t.total, metode:t.metode, statusBayar:t.status_bayar, createdAt:t.created_at }));
+        return perluFull ? barus : gabungTrim(basis.transaksiToko, barus, cutoffTgl, 'createdAt');
+      })(),
       tagihan: (tagihanRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenisTagihanId:t.jenis_tagihan_id, bulan:t.bulan, jumlah:t.jumlah, status:t.status, tglBayar:t.tgl_bayar })),
       jenisTagihan: (jenisTagihanRows||[]).map(j=>({ id:j.id, nama:j.nama })),
       iuranDetail: (iuranDetailRows||[]).map(d=>({
         id:d.id, santriId:d.santri_id, jumlah:d.jumlah, status:d.status, tglBayar:d.tgl_bayar,
         tanggal: d.iuran ? d.iuran.tanggal : null, keterangan: d.iuran ? d.iuran.keterangan : null
-      }))
+      })),
+      // Rekap per bulan -- dipakai untuk menampilkan riwayat sebelum 30 hari terakhir
+      // (lihat cutoffTgl di atas), tanpa perlu narik detail baris satu-satu.
+      rekapAbsensi: (rekapAbsensiRows||[]).map(r=>({ bulan:r.bulan, hadir:r.hadir, izin:r.izin, sakit:r.sakit, alpha:r.alpha, total:r.total })),
+      rekapHafalan: (rekapHafalanRows||[]).map(r=>({ bulan:r.bulan, jumlahSetoran:r.jumlah_setoran, juzAkhir:r.juz_akhir, halamanAkhir:r.halaman_akhir })),
+      rekapMurojaah: (rekapMurojaahRows||[]).map(r=>({ bulan:r.bulan, jumlahSetoran:r.jumlah_setoran, juzTerakhir:r.juz_terakhir })),
+      rekapSaldo: (rekapSaldoRows||[]).map(r=>({ bulan:r.bulan, jenis:r.jenis, jumlahTransaksi:r.jumlah_transaksi, totalNominal:r.total_nominal })),
+      rekapToko: (rekapTokoRows||[]).map(r=>({ bulan:r.bulan, jumlahTransaksi:r.jumlah_transaksi, totalBelanja:r.total_belanja }))
     };
-    // saldo santri = total transaksi_saldo berstatus 'aktif' saja, dihitung PERSIS sama
-    // seperti view saldo_santri di database (dipakai Aplikasi Keuangan/Kasir):
+    // saldo santri = total transaksi_saldo berstatus 'aktif' saja (SEMUA histori, dihitung
+    // di server lewat view saldo_santri -- persis logika yang sama dipakai Aplikasi
+    // Keuangan/Kasir):
     // - 'setoran' menambah saldo
     // - 'tarik' mengurangi saldo
     // - 'bayar' mengurangi saldo HANYA kalau metode-nya 'saldo' atau kosong (belanja
     //   dibayar pakai saldo). 'bayar' dengan metode 'tunai' (dibayar cash di toko)
     //   TIDAK mengurangi saldo.
-    // Bug lama: transaksi berstatus 'dibatalkan' ikut dihitung (sudah difilter di query
-    // di atas), dan 'bayar' tunai ikut dianggap mengurangi saldo -- ini yang bikin saldo
-    // di app Wali sempat tampil minus padahal saldo sebenarnya tidak minus.
-    DB.santri[0].saldo = DB.transaksiSaldo.reduce((sum,t)=>{
+    // Kalau view gagal/kosong, fallback ke jumlah dari transaksiSaldo yang sudah ditarik
+    // (30 hari terakhir saja -- cuma perkiraan, bukan saldo pasti).
+    DB.santri[0].saldo = (saldoView && saldoView.saldo!=null) ? saldoView.saldo : DB.transaksiSaldo.reduce((sum,t)=>{
       if(t.jenis==='setoran') return sum + t.jumlah;
       if(t.jenis==='tarik') return sum - t.jumlah;
       if(t.jenis==='bayar' && (t.metode==='saldo' || !t.metode)) return sum - t.jumlah;
       return sum;
     }, 0);
     simpanCache(DB);
+    if(perluFull) catatFullSync();
     enterApp();
     return true;
   }catch(e){
@@ -572,6 +665,13 @@ function ringkasanAbsensiBulanIni(s){
 function renderBeranda(){
   const s = mySantri();
   const lastHafalan = DB.hafalan.filter(h=>h.santriId===s.id).sort((a,b)=>b.tanggal.localeCompare(a.tanggal))[0];
+  // Kalau tidak ada setoran hafalan dalam 30 hari terakhir, pakai posisi akhir dari
+  // rekap bulan paling baru (sudah urut bulan terbaru dulu) supaya kartu ini tidak
+  // tiba-tiba kosong walau sebenarnya santri punya riwayat hafalan.
+  const rekapTerbaru = (!lastHafalan && DB.rekapHafalan && DB.rekapHafalan[0]) ? DB.rekapHafalan[0] : null;
+  const labelHafalanTerakhir = lastHafalan
+    ? `Juz ${lastHafalan.juz} &middot; Hal. ${lastHafalan.halaman}`
+    : (rekapTerbaru ? `Juz ${rekapTerbaru.juzAkhir} &middot; Hal. ${rekapTerbaru.halamanAkhir}` : 'Belum ada data');
   const abs = ringkasanAbsensiBulanIni(s);
   const tg = dataTagihanIuran(s);
   document.getElementById('content').innerHTML = `
@@ -590,7 +690,7 @@ function renderBeranda(){
       </button>
       <button class="stat-item purple" onclick="goPage('hafalan')">
         <span class="icon-circle">&#128214;</span>
-        <span class="stat-text"><span class="num">${lastHafalan?`Juz ${lastHafalan.juz} &middot; Hal. ${lastHafalan.halaman}`:'Belum ada data'}</span><span class="label">Hafalan terakhir</span></span>
+        <span class="stat-text"><span class="num">${labelHafalanTerakhir}</span><span class="label">Hafalan terakhir</span></span>
         <span class="chev">&#8250;</span>
       </button>
       <button class="stat-item amber" onclick="goPage('absensi')">
@@ -702,6 +802,18 @@ function renderRiwayat(){
       ${belanja.length===0?'<p class="muted">Belum ada transaksi belanja di Toko pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Item</th><th>Total</th><th>Metode</th><th>Status</th></tr>
       ${belanja.map(t=>`<tr><td>${(t.createdAt||'').slice(0,10)}</td><td>${(t.items||[]).map(i=>`${escapeHtml(i.nama_produk||i.namaProduk)} x${i.qty}`).join(', ')||'-'}</td><td>${rupiah(t.total)}</td><td>${escapeHtml(t.metode)}</td><td>${t.statusBayar==='lunas'?'Lunas':'Hutang'}</td></tr>`).join('')}</table>`}
     </div>
+    <div class="card">
+      <div class="card-title">Rekap Transaksi Saldo per Bulan</div>
+      ${KET_REKAP_BULANAN}
+      ${(!DB.rekapSaldo || DB.rekapSaldo.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th>Jenis</th><th class="c">Jumlah</th><th>Total</th></tr>
+      ${DB.rekapSaldo.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td>${LABEL_JENIS_RIWAYAT[r.jenis]||r.jenis}</td><td class="c">${r.jumlahTransaksi}x</td><td>${rupiah(r.totalNominal)}</td></tr>`).join('')}</table>`}
+    </div>
+    <div class="card">
+      <div class="card-title">Rekap Belanja Toko per Bulan</div>
+      ${KET_REKAP_BULANAN}
+      ${(!DB.rekapToko || DB.rekapToko.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Transaksi</th><th>Total Belanja</th></tr>
+      ${DB.rekapToko.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahTransaksi}x</td><td>${rupiah(r.totalBelanja)}</td></tr>`).join('')}</table>`}
+    </div>
   `;
 }
 
@@ -757,6 +869,12 @@ function renderAbsensi(){
         return `<tr><td>${a.tanggal}</td><td>${kg?escapeHtml(kg.nama):'-'}</td><td><span class="tag ${tagClass}">${label}</span></td></tr>`;
       }).join('')}</table>`}
     </div>
+    <div class="card">
+      <div class="card-title">Rekap per Bulan</div>
+      ${KET_REKAP_BULANAN}
+      ${(!DB.rekapAbsensi || DB.rekapAbsensi.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Hadir</th><th class="c">Izin</th><th class="c">Sakit</th><th class="c">Alpha</th><th class="c">%</th></tr>
+      ${DB.rekapAbsensi.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c num-hadir">${r.hadir}</td><td class="c ${r.izin>0?'num-izin':'num-zero'}">${r.izin}</td><td class="c">${r.sakit}</td><td class="c ${r.alpha>0?'num-alpha':'num-zero'}">${r.alpha}</td><td class="c">${r.total?Math.round(r.hadir/r.total*100):0}%</td></tr>`).join('')}</table>`}
+    </div>
   `;
 }
 
@@ -792,6 +910,18 @@ function renderHafalan(){
     <div class="card">
       <div class="card-title">Riwayat Murojaah</div>
       ${murojaahItems.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Cakupan</th><th>Keterangan</th></tr>${murojaahItems.map(m=>`<tr><td>${m.tanggal}</td><td>${escapeHtml(namaKegiatan(m.kegiatanId))}</td><td>${m.juz}</td><td>${escapeHtml(m.cakupan)}</td><td><span class="tag ${m.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(m.keterangan||'Lancar')}</span></td></tr>`).join('')}</table>`}
+    </div>
+    <div class="card">
+      <div class="card-title">Rekap Hafalan per Bulan</div>
+      ${KET_REKAP_BULANAN}
+      ${(!DB.rekapHafalan || DB.rekapHafalan.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Setoran</th><th>Posisi Akhir Bulan</th></tr>
+      ${DB.rekapHafalan.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahSetoran}</td><td>Juz ${r.juzAkhir} &middot; Hal. ${r.halamanAkhir}</td></tr>`).join('')}</table>`}
+    </div>
+    <div class="card">
+      <div class="card-title">Rekap Murojaah per Bulan</div>
+      ${KET_REKAP_BULANAN}
+      ${(!DB.rekapMurojaah || DB.rekapMurojaah.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Setoran</th><th>Juz Terakhir</th></tr>
+      ${DB.rekapMurojaah.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahSetoran}</td><td>${r.juzTerakhir}</td></tr>`).join('')}</table>`}
     </div>
   `;
   drawTrend(items);
