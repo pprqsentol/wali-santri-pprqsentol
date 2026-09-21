@@ -111,8 +111,16 @@ function dalamCamel(obj){
 }
 
 const CACHE_KEY = 'wali_cache_v1'; // cadangan tampilan terakhir saja (bukan sumber data utama), supaya tetap bisa dilihat sebentar walau lagi tidak ada internet
-function simpanCache(db){ try{ localStorage.setItem(CACHE_KEY, JSON.stringify(db)); }catch(e){} }
+const SYNC_TS_KEY = 'wali_last_sync_v1'; // kapan terakhir kali BERHASIL narik data lengkap dari Supabase
+const MIN_SYNC_MS = 3 * 60 * 1000; // 3 menit -- jarak minimal antar tarikan data lengkap
+function simpanCache(db){ try{ localStorage.setItem(CACHE_KEY, JSON.stringify(db)); localStorage.setItem(SYNC_TS_KEY, String(Date.now())); }catch(e){} }
 function ambilCache(){ try{ return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); }catch(e){ return null; } }
+function cacheMasihSegar(){
+  try{
+    const t = parseInt(localStorage.getItem(SYNC_TS_KEY)||'0', 10);
+    return t > 0 && (Date.now() - t) < MIN_SYNC_MS;
+  }catch(e){ return false; }
+}
 
 let DB = { santri: [], mahram: [], kegiatan: [], absensi: [], hafalan: [], murojaah: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [] };
 let ME = JSON.parse(sessionStorage.getItem('wali_session') || 'null'); // {noInduk, kodeWali} -- hanya untuk sesi berjalan, tidak dicadangkan ke localStorage
@@ -188,7 +196,13 @@ function emailWaliDari(noInduk){
   return (noInduk||'').trim().toLowerCase().replace(/\s+/g,'') + '@' + EMAIL_DOMAIN_WALI;
 }
 async function initLogin(){
-  if(ME){ await muatDataWali(ME.noInduk, ME.kodeWali, true); }
+  if(!ME) return;
+  const c = ambilCache();
+  if(c && cacheMasihSegar()){
+    DB = c; enterApp(); // tampilkan cache langsung, tidak perlu narik ulang ke server
+    return;
+  }
+  await muatDataWali(ME.noInduk, ME.kodeWali, true);
 }
 async function doLogin(){
   const noInduk = val('loginNoInduk').trim();
@@ -243,7 +257,10 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       sb.from('hafalan').select('id,santri_id,tanggal,juz,halaman_sampai,kegiatan_id,keterangan').eq('santri_id', s.id).order('tanggal'),
       sb.from('murojaah').select('id,santri_id,kegiatan_id,tanggal,juz,cakupan,keterangan').eq('santri_id', s.id).order('tanggal'),
       sb.from('transaksi_saldo').select('id,santri_id,jenis,jumlah,keterangan,tanggal,metode').eq('santri_id', s.id).eq('status', 'aktif'),
-      sb.from('transaksi_toko').select('id,santri_id,items,total,metode,status_bayar,created_at').eq('santri_id', s.id),
+      // items_ringkas = generated column di Supabase, cuma berisi {nama_produk,qty} per barang
+      // (bukan produk_id/harga_beli/harga_jual yang tidak pernah dipakai di app ini -- lumayan
+      // memangkas ukuran respons karena riwayat belanja biasanya baris terbanyak per santri)
+      sb.from('transaksi_toko').select('id,santri_id,items:items_ringkas,total,metode,status_bayar,created_at').eq('santri_id', s.id),
       sb.from('tagihan').select('id,santri_id,jenis_tagihan_id,bulan,jumlah,status,tgl_bayar').eq('santri_id', s.id),
       sb.from('jenis_tagihan').select('id,nama'),
       sb.from('iuran_detail').select('id, santri_id, jumlah, status, tgl_bayar, iuran(tanggal, keterangan)').eq('santri_id', s.id)
@@ -834,7 +851,6 @@ function renderTagihan(){
    berkali-kali kalau pengguna gonta-ganti app dengan cepat. Kalau gagal
    (mis. lagi tidak ada internet), dibiarkan saja -- data lama yang sudah
    tampil tetap dipakai, tidak perlu mengganggu dengan alert. */
-let lastAutoRefresh = 0;
 async function muatUlang(){
   const ok = await muatDataWali(ME.noInduk, ME.kodeWali, false);
   if(ok) goPage(currentPage);
@@ -842,9 +858,7 @@ async function muatUlang(){
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState!=='visible' || !ME) return;
   if(document.getElementById('app').style.display==='none') return;
-  const now = Date.now();
-  if(now - lastAutoRefresh < 60000) return;
-  lastAutoRefresh = now;
+  if(cacheMasihSegar()) return; // baru saja sync (<3 menit lalu), tidak perlu tarik ulang
   muatUlang();
 });
 
