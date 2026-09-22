@@ -671,15 +671,32 @@ function ringkasanAbsensiBulanIni(s){
 // Tiap kartu ringkasan bisa diketuk untuk langsung pindah ke tab detailnya
 // (kartu Saldo mengarah ke tab Riwayat, karena tab Saldo tersendiri sudah
 // dihapus -- isinya dulu cuma mengulang angka yang sama).
+/* Urutan hafalan pondok TIDAK 1-30 berurutan, tapi 29,30,1,2,...,28 -- SAMA
+   PERSIS dengan Aplikasi Pembina (JUZ_ORDER). Dipakai HANYA untuk menghitung
+   rentang "Juz X sampai Y" pada tes kategori '10juz' di bawah. */
+const JUZ_ORDER = [29, 30, ...Array.from({length:28}, (_,i)=>i+1)];
+function posisiJuz(juz){ return JUZ_ORDER.indexOf(juz) + 1; }
+/* Baris nilai utama kartu Tes Kenaikan -- "Juz 25" untuk tes 1 juz, atau
+   "Juz 9 sampai 18" untuk tes 10 juz (rentang syaratJuz juz terakhir yang
+   berakhir di juzSelesai, dihitung lewat JUZ_ORDER supaya benar walau
+   melewati batas 28->29/30). */
+function labelJuzTes(tes){
+  if(tes.kategori !== '10juz') return `Juz ${tes.juzSelesai}`;
+  const posAkhir = posisiJuz(tes.juzSelesai);
+  const posAwal = Math.max(1, posAkhir - tes.syaratJuz + 1);
+  const juzAwal = JUZ_ORDER[posAwal - 1];
+  return juzAwal === tes.juzSelesai ? `Juz ${tes.juzSelesai}` : `Juz ${juzAwal} sampai ${tes.juzSelesai}`;
+}
 /* Kartu Tes Kenaikan Juz di Beranda -- SELALU ditampilkan (bukan cuma
-   kalau sedang menunggu), supaya wali tahu pasti statusnya:
-   - Tidak ada tes yang menunggu -> tampilkan info netral "belum ada".
-   - Ada tes menunggu, kategori '10juz' (santri Takhossus tuntas 1 blok
-     hafalan -- baca 10 juz terakhir, atau 5 kalau total belum sampai 10
-     juz) -> tes besar, WAJIB disimak langsung oleh wali di pondok.
-   - Ada tes menunggu, kategori '1juz' (baca ulang 1 juz yang baru
-     tuntas) -> tes reguler oleh pembina, wali tidak wajib hadir,
-     cukup diberi tahu sedang di tes juz berapa.
+   kalau sedang menunggu), dibuat SERINGKAS mungkin (judul, juz, batas hari
+   saja) supaya tidak memenuhi Beranda -- detail lengkap tetap ada di tab
+   Hafalan/Riwayat kalau wali butuh:
+   - Tidak ada tes yang menunggu -> tampilkan info netral "Belum ada".
+   - Kategori '10juz' (santri Takhossus tuntas 1 blok hafalan) -> tes besar,
+     WAJIB disimak langsung oleh wali di pondok -- diberi badge merah kecil
+     supaya tetap menonjol walau ringkas.
+   - Kategori '1juz' (baca ulang 1 juz yang baru tuntas) -> tes reguler oleh
+     pembina, wali tidak wajib hadir.
    Nilai kategori PERSIS '1juz'/'10juz' ini dibatasi CHECK constraint di
    database (tes_kenaikan_juz_kategori_check) -- SAMA PERSIS dengan
    Aplikasi Pembina (function tentukanTesKenaikanJuz) & Aplikasi Pondok --
@@ -691,29 +708,19 @@ function kartuTesKenaikan(){
     return `
     <div class="card" style="margin-bottom:14px">
       <div class="card-title">Tes Kenaikan Juz</div>
-      <p class="muted" style="margin:4px 0 0">Belum ada Tes Kenaikan Juz yang menunggu saat ini.</p>
+      <p class="muted" style="margin:2px 0 0">Belum ada</p>
     </div>`;
   }
   const mulai = new Date(tes.tanggalMulai);
   const batas = new Date(mulai.getTime() + tes.batasHari*86400000);
   const sisa = Math.ceil((batas - new Date(todayStr()))/86400000);
-  const sisaTeks = sisa<0
-    ? `Sudah lewat ${Math.abs(sisa)} hari dari batas waktu.`
-    : `Mohon ditindaklanjuti dalam ${sisa} hari (batas ${tes.batasHari} hari sejak ${tes.tanggalMulai}).`;
-  if(tes.kategori === '10juz'){
-    return `
-    <div class="card" style="border:2px solid var(--danger,#d33);margin-bottom:14px">
-      <div class="card-title" style="color:var(--danger,#d33)">&#9888; Ananda Siap Tes Kenaikan &mdash; Wali Wajib Hadir</div>
-      <p style="margin:4px 0">Ananda sudah menuntaskan hafalan sampai <b>Juz ${tes.juzSelesai}</b> dan wajib membaca <b>${tes.syaratJuz} juz terakhir</b> hafalannya, disimak <b>langsung oleh Bapak/Ibu</b> di pondok, sebelum boleh lanjut menghafal juz berikutnya.</p>
-      <p class="muted" style="margin:0">${sisaTeks}</p>
-      ${tes.waliHadir ? '<p style="margin:6px 0 0;color:var(--green-600,#2e7d32)">&#10003; Wali sudah tercatat hadir, menunggu pembina menandai lulus.</p>' : ''}
-    </div>`;
-  }
+  const batasTeks = sisa<0 ? `Lewat ${Math.abs(sisa)} hari` : `Batas ${sisa} hari`;
+  const wajibHadir = tes.kategori === '10juz';
   return `
-    <div class="card" style="margin-bottom:14px">
-      <div class="card-title">Ananda Sedang Tes Kenaikan Juz</div>
-      <p style="margin:4px 0">Ananda sudah menuntaskan <b>Juz ${tes.juzSelesai}</b> dan sedang menunggu Tes Kenaikan (membaca ulang Juz ${tes.juzSelesai}, harus lancar) oleh pembina, sebelum boleh lanjut ke juz berikutnya. Wali tidak wajib hadir untuk tes ini.</p>
-      <p class="muted" style="margin:0">${sisaTeks}</p>
+    <div class="card" style="margin-bottom:14px${wajibHadir ? ';border:2px solid var(--danger,#d33)' : ''}">
+      <div class="card-title">Tes Kenaikan Juz${wajibHadir ? ' <span class="tag tag-belum">Wali wajib hadir</span>' : ''}</div>
+      <div style="font-size:19px;font-weight:800;margin:2px 0">${labelJuzTes(tes)}</div>
+      <p class="muted" style="margin:0">${batasTeks}</p>
     </div>`;
 }
 function renderBeranda(){
