@@ -140,7 +140,7 @@ function gabungTrim(lama, baru, cutoffTgl, kolomTgl){
   return Array.from(map.values()).filter(x => String(x[kolomTgl]||'').slice(0,10) >= cutoffTgl);
 }
 
-let DB = { santri: [], mahram: [], kegiatan: [], absensi: [], hafalan: [], murojaah: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [], rekapAbsensi: [], rekapHafalan: [], rekapMurojaah: [], rekapSaldo: [], rekapToko: [] };
+let DB = { santri: [], mahram: [], kegiatan: [], tesKenaikanJuz: [], absensi: [], hafalan: [], murojaah: [], transaksiSaldo: [], transaksiToko: [], tagihan: [], jenisTagihan: [], iuranDetail: [], rekapAbsensi: [], rekapHafalan: [], rekapMurojaah: [], rekapSaldo: [], rekapToko: [] };
 let ME = JSON.parse(sessionStorage.getItem('wali_session') || 'null'); // {noInduk, kodeWali} -- hanya untuk sesi berjalan, tidak dicadangkan ke localStorage
 
 // Urutan tab: beranda, info, hafalan, absensi, tagihan, riwayat -- tab Saldo
@@ -308,7 +308,7 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
     }
 
     const [
-      { data: mahramRows }, { data: kegiatanRows }, { data: absensiRows },
+      { data: mahramRows }, { data: kegiatanRows }, { data: tesJuzRows }, { data: absensiRows },
       { data: hafalanRows }, { data: murojaahRows }, { data: saldoRows }, { data: tokoRows },
       { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows },
       { data: saldoView },
@@ -317,6 +317,10 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
     ] = await Promise.all([
       sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url,foto_thumb_url').eq('santri_id', s.id),
       sb.from('kegiatan').select('id,nama,program_khusus').eq('aktif', true),
+      // Tes Kenaikan Juz -- barisnya sedikit (hanya tiap juz/blok 10 juz tuntas), jadi
+      // ditarik PENUH tiap loadAll() (bukan didelta), supaya notice "tes 10 juz, wali harus
+      // ke pondok" selalu muncul akurat begitu pembina mencatatnya.
+      sb.from('tes_kenaikan_juz').select('id,santri_id,juz_selesai,kategori,syarat_juz,tanggal_mulai,batas_hari,status,tanggal_lulus,wali_hadir').eq('santri_id', s.id),
       qAbsensi, qHafalan, qMurojaah, qSaldo, qToko,
       sb.from('tagihan').select('id,santri_id,jenis_tagihan_id,bulan,jumlah,status,tgl_bayar').eq('santri_id', s.id),
       sb.from('jenis_tagihan').select('id,nama'),
@@ -350,6 +354,11 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       }],
       mahram,
       kegiatan: (kegiatanRows||[]).map(k=>({ id:k.id, nama:k.nama, programKhusus:k.program_khusus })),
+      tesKenaikanJuz: (tesJuzRows||[]).map(t=>({
+        id:t.id, juzSelesai:t.juz_selesai, kategori:t.kategori, syaratJuz:t.syarat_juz,
+        tanggalMulai:t.tanggal_mulai, batasHari:t.batas_hari, status:t.status,
+        tanggalLulus:t.tanggal_lulus||null, waliHadir: !!t.wali_hadir
+      })),
       // status mentah di tabel absensi berupa teks ('Hadir'/'Izin'/dst), disamakan ke kode
       // singkat h/i/a persis seperti yang dulu dilakukan RPC data_wali_santri.
       // Kalau ini sync DELTA: baris hasil query cuma yang berubah sejak sync terakhir, jadi
@@ -662,6 +671,23 @@ function ringkasanAbsensiBulanIni(s){
 // Tiap kartu ringkasan bisa diketuk untuk langsung pindah ke tab detailnya
 // (kartu Saldo mengarah ke tab Riwayat, karena tab Saldo tersendiri sudah
 // dihapus -- isinya dulu cuma mengulang angka yang sama).
+/* Notice "wali harus ke pondok" -- muncul begitu pembina mencatat santri Takhossus
+   tuntas 1 blok 10 juz (juz 8/18/28), sampai wali datang & pembina menandai lulus
+   (lihat labelKategoriTes/kategori '10juz' -- logikanya sama dengan Aplikasi Pondok
+   & Aplikasi Pembina). */
+function noticeTesJuzMenunggu(){
+  const tes = DB.tesKenaikanJuz.find(t=>t.status==='menunggu' && t.kategori==='10juz');
+  if(!tes) return '';
+  const mulai = new Date(tes.tanggalMulai);
+  const batas = new Date(mulai.getTime() + tes.batasHari*86400000);
+  const sisa = Math.ceil((batas - new Date(todayStr()))/86400000);
+  return `
+    <div class="card" style="border:2px solid var(--danger,#d33);margin-bottom:14px">
+      <div class="card-title" style="color:var(--danger,#d33)">&#9888; Ananda siap Tes 10 Juz</div>
+      <p style="margin:4px 0">Ananda sudah menuntaskan hafalan sampai <b>Juz ${tes.juzSelesai}</b> (10 juz) dan wajib disimak <b>langsung oleh Bapak/Ibu</b> di pondok sebelum boleh lanjut menghafal.</p>
+      <p class="muted" style="margin:0">${sisa<0 ? `Sudah lewat ${Math.abs(sisa)} hari dari batas waktu.` : `Mohon datang ke pondok dalam ${sisa} hari (batas ${tes.batasHari} hari sejak ${tes.tanggalMulai}).`}</p>
+    </div>`;
+}
 function renderBeranda(){
   const s = mySantri();
   const lastHafalan = DB.hafalan.filter(h=>h.santriId===s.id).sort((a,b)=>b.tanggal.localeCompare(a.tanggal))[0];
@@ -681,6 +707,8 @@ function renderBeranda(){
       <p class="muted-invert">No. induk ${escapeHtml(s.noInduk)} &middot; ${escapeHtml(s.kelas)||'-'}</p>
       <span class="tag ${s.program==='Takhossus'?'tag-takhossus':'tag-nontakhossus'}">${escapeHtml(s.program)||'-'}</span>
     </div>
+
+    ${noticeTesJuzMenunggu()}
 
     <div class="stat-list">
       <button class="stat-item green" onclick="goPage('riwayat')">
