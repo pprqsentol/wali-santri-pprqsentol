@@ -801,7 +801,7 @@ function renderInfo(){
 }
 
 /* ---------- RIWAYAT (juga menggantikan tab Saldo yang dihapus) ---------- */
-let riwPeriode='bulan', riwFrom='', riwTo=todayStr(), riwJenis='semua';
+let riwPeriode='hari', riwFrom='', riwTo=todayStr(), riwJenis='semua';
 const LABEL_JENIS_RIWAYAT = {setoran:'Top Up', tarik:'Tarik Tunai', bayar:'Bayar (saldo)'};
 function setRiwPeriode(mode){
   riwPeriode = mode;
@@ -839,6 +839,7 @@ function renderRiwayat(){
           <option value="hari" ${riwPeriode==='hari'?'selected':''}>Hari ini</option>
           <option value="pekan" ${riwPeriode==='pekan'?'selected':''}>Pekan ini</option>
           <option value="bulan" ${riwPeriode==='bulan'?'selected':''}>Bulan ini</option>
+          <option value="tahun" ${riwPeriode==='tahun'?'selected':''}>Tahun ini</option>
           <option value="custom" ${riwPeriode==='custom'?'selected':''}>Tanggal dari - sampai</option>
         </select>
       </div>
@@ -865,6 +866,7 @@ function renderRiwayat(){
       ${belanja.length===0?'<p class="muted">Belum ada transaksi belanja di Toko pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Item</th><th>Total</th><th>Metode</th><th>Status</th></tr>
       ${belanja.map(t=>`<tr><td>${(t.createdAt||'').slice(0,10)}</td><td>${(t.items||[]).map(i=>`${escapeHtml(i.nama_produk||i.namaProduk)} x${i.qty}`).join(', ')||'-'}</td><td>${rupiah(t.total)}</td><td>${escapeHtml(t.metode)}</td><td>${t.statusBayar==='lunas'?'Lunas':'Hutang'}</td></tr>`).join('')}</table>`}
     </div>
+    ${riwPeriode!=='tahun'?'':`
     <div class="card">
       <div class="card-title">Rekap Transaksi Saldo per Bulan</div>
       ${KET_REKAP_BULANAN}
@@ -877,11 +879,12 @@ function renderRiwayat(){
       ${(!DB.rekapToko || DB.rekapToko.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Transaksi</th><th>Total Belanja</th></tr>
       ${DB.rekapToko.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahTransaksi}x</td><td>${rupiah(r.totalBelanja)}</td></tr>`).join('')}</table>`}
     </div>
+    `}
   `;
 }
 
 /* ---------- ABSENSI ---------- */
-let absMode='bulan', absFrom='', absTo=todayStr();
+let absMode='hari', absFrom='', absTo=todayStr();
 const LABEL_STATUS_ABSEN = { h:'Hadir', i:'Izin', a:'Alpha' };
 const TAG_STATUS_ABSEN = { h:'tag-hadir', i:'tag-izin', a:'tag-alpha' };
 function setAbsPeriode(mode){ absMode=mode; const r=rentangPeriode(mode); absFrom=r.dari; absTo=r.sampai; renderAbsensi(); }
@@ -932,17 +935,19 @@ function renderAbsensi(){
         return `<tr><td>${a.tanggal}</td><td>${kg?escapeHtml(kg.nama):'-'}</td><td><span class="tag ${tagClass}">${label}</span></td></tr>`;
       }).join('')}</table>`}
     </div>
+    ${absMode!=='tahun'?'':`
     <div class="card">
       <div class="card-title">Rekap per Bulan</div>
       ${KET_REKAP_BULANAN}
       ${(!DB.rekapAbsensi || DB.rekapAbsensi.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Hadir</th><th class="c">Izin</th><th class="c">Sakit</th><th class="c">Alpha</th><th class="c">%</th></tr>
       ${DB.rekapAbsensi.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c num-hadir">${r.hadir}</td><td class="c ${r.izin>0?'num-izin':'num-zero'}">${r.izin}</td><td class="c">${r.sakit}</td><td class="c ${r.alpha>0?'num-alpha':'num-zero'}">${r.alpha}</td><td class="c">${r.total?Math.round(r.hadir/r.total*100):0}%</td></tr>`).join('')}</table>`}
     </div>
+    `}
   `;
 }
 
 /* ---------- HAFALAN ---------- */
-let hfMode='bulan', hfFrom='', hfTo=todayStr();
+let hfMode='hari', hfFrom='', hfTo=todayStr();
 function setHfPeriode(mode){ hfMode=mode; const r=rentangPeriode(mode); hfFrom=r.dari; hfTo=r.sampai; renderHafalan(); }
 function renderHafalan(){
   if(!hfFrom){ const r=rentangPeriode(hfMode); hfFrom=r.dari; hfTo=r.sampai; }
@@ -974,6 +979,7 @@ function renderHafalan(){
       <div class="card-title">Riwayat Murojaah</div>
       ${murojaahItems.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Cakupan</th><th>Keterangan</th></tr>${murojaahItems.map(m=>`<tr><td>${m.tanggal}</td><td>${escapeHtml(namaKegiatan(m.kegiatanId))}</td><td>${m.juz}</td><td>${escapeHtml(m.cakupan)}</td><td><span class="tag ${m.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(m.keterangan||'Lancar')}</span></td></tr>`).join('')}</table>`}
     </div>
+    ${hfMode!=='tahun'?'':`
     <div class="card">
       <div class="card-title">Rekap Hafalan per Bulan</div>
       ${KET_REKAP_BULANAN}
@@ -986,6 +992,7 @@ function renderHafalan(){
       ${(!DB.rekapMurojaah || DB.rekapMurojaah.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Setoran</th><th>Juz Terakhir</th></tr>
       ${DB.rekapMurojaah.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahSetoran}</td><td>${r.juzTerakhir}</td></tr>`).join('')}</table>`}
     </div>
+    `}
   `;
   drawTrend(items);
 }
