@@ -671,21 +671,49 @@ function ringkasanAbsensiBulanIni(s){
 // Tiap kartu ringkasan bisa diketuk untuk langsung pindah ke tab detailnya
 // (kartu Saldo mengarah ke tab Riwayat, karena tab Saldo tersendiri sudah
 // dihapus -- isinya dulu cuma mengulang angka yang sama).
-/* Notice "wali harus ke pondok" -- muncul begitu pembina mencatat santri Takhossus
-   tuntas 1 blok 10 juz (juz 8/18/28), sampai wali datang & pembina menandai lulus
-   (lihat labelKategoriTes/kategori '10juz' -- logikanya sama dengan Aplikasi Pondok
-   & Aplikasi Pembina). */
-function noticeTesJuzMenunggu(){
-  const tes = DB.tesKenaikanJuz.find(t=>t.status==='menunggu' && t.kategori==='10juz');
-  if(!tes) return '';
+/* Kartu Tes Kenaikan Juz di Beranda -- SELALU ditampilkan (bukan cuma
+   kalau sedang menunggu), supaya wali tahu pasti statusnya:
+   - Tidak ada tes yang menunggu -> tampilkan info netral "belum ada".
+   - Ada tes menunggu, kategori '10juz' (santri Takhossus tuntas 1 blok
+     hafalan -- baca 10 juz terakhir, atau 5 kalau total belum sampai 10
+     juz) -> tes besar, WAJIB disimak langsung oleh wali di pondok.
+   - Ada tes menunggu, kategori '1juz' (baca ulang 1 juz yang baru
+     tuntas) -> tes reguler oleh pembina, wali tidak wajib hadir,
+     cukup diberi tahu sedang di tes juz berapa.
+   Nilai kategori PERSIS '1juz'/'10juz' ini dibatasi CHECK constraint di
+   database (tes_kenaikan_juz_kategori_check) -- SAMA PERSIS dengan
+   Aplikasi Pembina (function tentukanTesKenaikanJuz) & Aplikasi Pondok --
+   jangan diubah sendiri-sendiri di salah satu app tanpa menyamakan yang
+   lain. */
+function kartuTesKenaikan(){
+  const tes = DB.tesKenaikanJuz.find(t=>t.status==='menunggu');
+  if(!tes){
+    return `
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-title">Tes Kenaikan Juz</div>
+      <p class="muted" style="margin:4px 0 0">Belum ada Tes Kenaikan Juz yang menunggu saat ini.</p>
+    </div>`;
+  }
   const mulai = new Date(tes.tanggalMulai);
   const batas = new Date(mulai.getTime() + tes.batasHari*86400000);
   const sisa = Math.ceil((batas - new Date(todayStr()))/86400000);
-  return `
+  const sisaTeks = sisa<0
+    ? `Sudah lewat ${Math.abs(sisa)} hari dari batas waktu.`
+    : `Mohon ditindaklanjuti dalam ${sisa} hari (batas ${tes.batasHari} hari sejak ${tes.tanggalMulai}).`;
+  if(tes.kategori === '10juz'){
+    return `
     <div class="card" style="border:2px solid var(--danger,#d33);margin-bottom:14px">
-      <div class="card-title" style="color:var(--danger,#d33)">&#9888; Ananda siap Tes 10 Juz</div>
-      <p style="margin:4px 0">Ananda sudah menuntaskan hafalan sampai <b>Juz ${tes.juzSelesai}</b> (10 juz) dan wajib disimak <b>langsung oleh Bapak/Ibu</b> di pondok sebelum boleh lanjut menghafal.</p>
-      <p class="muted" style="margin:0">${sisa<0 ? `Sudah lewat ${Math.abs(sisa)} hari dari batas waktu.` : `Mohon datang ke pondok dalam ${sisa} hari (batas ${tes.batasHari} hari sejak ${tes.tanggalMulai}).`}</p>
+      <div class="card-title" style="color:var(--danger,#d33)">&#9888; Ananda Siap Tes Kenaikan &mdash; Wali Wajib Hadir</div>
+      <p style="margin:4px 0">Ananda sudah menuntaskan hafalan sampai <b>Juz ${tes.juzSelesai}</b> dan wajib membaca <b>${tes.syaratJuz} juz terakhir</b> hafalannya, disimak <b>langsung oleh Bapak/Ibu</b> di pondok, sebelum boleh lanjut menghafal juz berikutnya.</p>
+      <p class="muted" style="margin:0">${sisaTeks}</p>
+      ${tes.waliHadir ? '<p style="margin:6px 0 0;color:var(--green-600,#2e7d32)">&#10003; Wali sudah tercatat hadir, menunggu pembina menandai lulus.</p>' : ''}
+    </div>`;
+  }
+  return `
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-title">Ananda Sedang Tes Kenaikan Juz</div>
+      <p style="margin:4px 0">Ananda sudah menuntaskan <b>Juz ${tes.juzSelesai}</b> dan sedang menunggu Tes Kenaikan (membaca ulang Juz ${tes.juzSelesai}, harus lancar) oleh pembina, sebelum boleh lanjut ke juz berikutnya. Wali tidak wajib hadir untuk tes ini.</p>
+      <p class="muted" style="margin:0">${sisaTeks}</p>
     </div>`;
 }
 function renderBeranda(){
@@ -708,7 +736,7 @@ function renderBeranda(){
       <span class="tag ${s.program==='Takhossus'?'tag-takhossus':'tag-nontakhossus'}">${escapeHtml(s.program)||'-'}</span>
     </div>
 
-    ${noticeTesJuzMenunggu()}
+    ${kartuTesKenaikan()}
 
     <div class="stat-list">
       <button class="stat-item green" onclick="goPage('riwayat')">
