@@ -826,6 +826,13 @@ function renderRiwayat(){
   if(riwJenis!=='semua') all = all.filter(t=>t.kategori===riwJenis);
   const belanja = DB.transaksiToko.filter(t=>t.santriId===s.id && (t.createdAt||'').slice(0,10)>=riwFrom && (t.createdAt||'').slice(0,10)<=riwTo)
     .sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  const tahunIni = todayStr().slice(0,4);
+  const bulanTahunIni = arr => (arr||[]).filter(r=>String(r.bulan).slice(0,4)===tahunIni);
+  const rekapSaldoTahunIni = bulanTahunIni(DB.rekapSaldo);
+  const rekapTokoTahunIni = bulanTahunIni(DB.rekapToko);
+  const totalPerJenis = {};
+  rekapSaldoTahunIni.forEach(r=>{ totalPerJenis[r.jenis] = (totalPerJenis[r.jenis]||0) + r.totalNominal; });
+  const totalBelanjaTahunIni = rekapTokoTahunIni.reduce((sum,r)=>sum+r.totalBelanja,0);
   document.getElementById('content').innerHTML = `
     <h2>Riwayat &amp; Saldo</h2>
     <div class="card stat green" style="text-align:center;margin-bottom:12px">
@@ -857,6 +864,7 @@ function renderRiwayat(){
       <div><label>Sampai tanggal</label><input type="date" value="${riwTo}" onchange="riwTo=this.value; renderRiwayat()"></div>
       `:''}
     </div>
+    ${riwPeriode==='tahun'?'':`
     <div class="card">
       ${all.length===0?'<p class="muted">Tidak ada transaksi pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Jenis</th><th>Keterangan</th><th>Nominal</th></tr>
       ${all.map(t=>`<tr><td>${t.tanggal}</td><td>${t.jenis}</td><td>${escapeHtml(t.ket)||'-'}</td><td style="color:${t.jumlah<0?'#c0392b':'#2f7d4f'}">${t.jumlah<0?'-':'+'}${rupiah(Math.abs(t.jumlah))}</td></tr>`).join('')}</table>`}
@@ -866,18 +874,26 @@ function renderRiwayat(){
       ${belanja.length===0?'<p class="muted">Belum ada transaksi belanja di Toko pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Item</th><th>Total</th><th>Metode</th><th>Status</th></tr>
       ${belanja.map(t=>`<tr><td>${(t.createdAt||'').slice(0,10)}</td><td>${(t.items||[]).map(i=>`${escapeHtml(i.nama_produk||i.namaProduk)} x${i.qty}`).join(', ')||'-'}</td><td>${rupiah(t.total)}</td><td>${escapeHtml(t.metode)}</td><td>${t.statusBayar==='lunas'?'Lunas':'Hutang'}</td></tr>`).join('')}</table>`}
     </div>
+    `}
     ${riwPeriode!=='tahun'?'':`
     <div class="card">
+      <div class="card-title">Total Tahun ${tahunIni}</div>
+      <table>
+        <tr><td>Top Up</td><td class="c">${rupiah(totalPerJenis.setoran||0)}</td></tr>
+        <tr><td>Bayar (saldo)</td><td class="c">${rupiah(totalPerJenis.bayar||0)}</td></tr>
+        <tr><td>Tarik Tunai</td><td class="c">${rupiah(totalPerJenis.tarik||0)}</td></tr>
+        <tr><td>Belanja Toko</td><td class="c">${rupiah(totalBelanjaTahunIni)}</td></tr>
+      </table>
+    </div>
+    <div class="card">
       <div class="card-title">Rekap Transaksi Saldo per Bulan</div>
-      ${KET_REKAP_BULANAN}
-      ${(!DB.rekapSaldo || DB.rekapSaldo.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th>Jenis</th><th class="c">Jumlah</th><th>Total</th></tr>
-      ${DB.rekapSaldo.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td>${LABEL_JENIS_RIWAYAT[r.jenis]||r.jenis}</td><td class="c">${r.jumlahTransaksi}x</td><td>${rupiah(r.totalNominal)}</td></tr>`).join('')}</table>`}
+      ${rekapSaldoTahunIni.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th>Jenis</th><th class="c">Jumlah</th><th>Total</th></tr>
+      ${rekapSaldoTahunIni.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td>${LABEL_JENIS_RIWAYAT[r.jenis]||r.jenis}</td><td class="c">${r.jumlahTransaksi}x</td><td>${rupiah(r.totalNominal)}</td></tr>`).join('')}</table>`}
     </div>
     <div class="card">
       <div class="card-title">Rekap Belanja Toko per Bulan</div>
-      ${KET_REKAP_BULANAN}
-      ${(!DB.rekapToko || DB.rekapToko.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Transaksi</th><th>Total Belanja</th></tr>
-      ${DB.rekapToko.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahTransaksi}x</td><td>${rupiah(r.totalBelanja)}</td></tr>`).join('')}</table>`}
+      ${rekapTokoTahunIni.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Transaksi</th><th>Total Belanja</th></tr>
+      ${rekapTokoTahunIni.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahTransaksi}x</td><td>${rupiah(r.totalBelanja)}</td></tr>`).join('')}</table>`}
     </div>
     `}
   `;
@@ -905,6 +921,7 @@ function renderAbsensi(){
       <div><label>Dari tanggal</label><input type="date" value="${absFrom}" onchange="absFrom=this.value; absMode=''; renderAbsensi()"></div>
       <div><label>Sampai tanggal</label><input type="date" value="${absTo}" onchange="absTo=this.value; absMode=''; renderAbsensi()"></div>
     </div>
+    ${absMode==='tahun'?'':`
     <div class="card">
       <div class="card-title">Ringkasan per kegiatan</div>
       ${Object.keys(byKegiatan).length===0?'<p class="muted">Belum ada data absensi pada periode ini.</p>':`<table class="tbl-absensi">
@@ -935,14 +952,18 @@ function renderAbsensi(){
         return `<tr><td>${a.tanggal}</td><td>${kg?escapeHtml(kg.nama):'-'}</td><td><span class="tag ${tagClass}">${label}</span></td></tr>`;
       }).join('')}</table>`}
     </div>
-    ${absMode!=='tahun'?'':`
-    <div class="card">
-      <div class="card-title">Rekap per Bulan</div>
-      ${KET_REKAP_BULANAN}
-      ${(!DB.rekapAbsensi || DB.rekapAbsensi.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Hadir</th><th class="c">Izin</th><th class="c">Sakit</th><th class="c">Alpha</th><th class="c">%</th></tr>
-      ${DB.rekapAbsensi.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c num-hadir">${r.hadir}</td><td class="c ${r.izin>0?'num-izin':'num-zero'}">${r.izin}</td><td class="c">${r.sakit}</td><td class="c ${r.alpha>0?'num-alpha':'num-zero'}">${r.alpha}</td><td class="c">${r.total?Math.round(r.hadir/r.total*100):0}%</td></tr>`).join('')}</table>`}
-    </div>
     `}
+    ${absMode!=='tahun'?'':(()=>{
+      const tahunIni = todayStr().slice(0,4);
+      const rekap = (DB.rekapAbsensi||[]).filter(r=>String(r.bulan).slice(0,4)===tahunIni);
+      return `
+    <div class="card">
+      <div class="card-title">Rekap per Bulan (${tahunIni})</div>
+      ${rekap.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Hadir</th><th class="c">Izin</th><th class="c">Sakit</th><th class="c">Alpha</th><th class="c">%</th></tr>
+      ${rekap.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c num-hadir">${r.hadir}</td><td class="c ${r.izin>0?'num-izin':'num-zero'}">${r.izin}</td><td class="c">${r.sakit}</td><td class="c ${r.alpha>0?'num-alpha':'num-zero'}">${r.alpha}</td><td class="c">${r.total?Math.round(r.hadir/r.total*100):0}%</td></tr>`).join('')}</table>`}
+    </div>
+    `;
+    })()}
   `;
 }
 
@@ -966,6 +987,7 @@ function renderHafalan(){
       <div><label>Dari tanggal</label><input type="date" value="${hfFrom}" onchange="hfFrom=this.value; hfMode=''; renderHafalan()"></div>
       <div><label>Sampai tanggal</label><input type="date" value="${hfTo}" onchange="hfTo=this.value; hfMode=''; renderHafalan()"></div>
     </div>
+    ${hfMode==='tahun'?'':`
     <div class="card stat"><div class="num">${tambah}</div><div class="label">Tambahan halaman pada periode ini</div></div>
     <div class="card">
       <div class="card-title">Grafik tren</div>
@@ -979,25 +1001,30 @@ function renderHafalan(){
       <div class="card-title">Riwayat Murojaah</div>
       ${murojaahItems.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Cakupan</th><th>Keterangan</th></tr>${murojaahItems.map(m=>`<tr><td>${m.tanggal}</td><td>${escapeHtml(namaKegiatan(m.kegiatanId))}</td><td>${m.juz}</td><td>${escapeHtml(m.cakupan)}</td><td><span class="tag ${m.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(m.keterangan||'Lancar')}</span></td></tr>`).join('')}</table>`}
     </div>
-    ${hfMode!=='tahun'?'':`
-    <div class="card">
-      <div class="card-title">Rekap Hafalan per Bulan</div>
-      ${KET_REKAP_BULANAN}
-      ${(!DB.rekapHafalan || DB.rekapHafalan.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Setoran</th><th>Posisi Akhir Bulan</th></tr>
-      ${DB.rekapHafalan.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahSetoran}</td><td>Juz ${r.juzAkhir} &middot; Hal. ${r.halamanAkhir}</td></tr>`).join('')}</table>`}
-    </div>
-    <div class="card">
-      <div class="card-title">Rekap Murojaah per Bulan</div>
-      ${KET_REKAP_BULANAN}
-      ${(!DB.rekapMurojaah || DB.rekapMurojaah.length===0)?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Setoran</th><th>Juz Terakhir</th></tr>
-      ${DB.rekapMurojaah.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahSetoran}</td><td>${r.juzTerakhir}</td></tr>`).join('')}</table>`}
-    </div>
     `}
+    ${hfMode!=='tahun'?'':(()=>{
+      const tahunIni = todayStr().slice(0,4);
+      const rekapHf = (DB.rekapHafalan||[]).filter(r=>String(r.bulan).slice(0,4)===tahunIni);
+      const rekapMj = (DB.rekapMurojaah||[]).filter(r=>String(r.bulan).slice(0,4)===tahunIni);
+      return `
+    <div class="card">
+      <div class="card-title">Rekap Hafalan per Bulan (${tahunIni})</div>
+      ${rekapHf.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Setoran</th><th>Posisi Akhir Bulan</th></tr>
+      ${rekapHf.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahSetoran}</td><td>Juz ${r.juzAkhir} &middot; Hal. ${r.halamanAkhir}</td></tr>`).join('')}</table>`}
+    </div>
+    <div class="card">
+      <div class="card-title">Rekap Murojaah per Bulan (${tahunIni})</div>
+      ${rekapMj.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Bulan</th><th class="c">Jumlah Setoran</th><th>Juz Terakhir</th></tr>
+      ${rekapMj.map(r=>`<tr><td>${labelBulanDate(r.bulan)}</td><td class="c">${r.jumlahSetoran}</td><td>${r.juzTerakhir}</td></tr>`).join('')}</table>`}
+    </div>
+    `;
+    })()}
   `;
-  drawTrend(items);
+  if(hfMode!=='tahun') drawTrend(items);
 }
 function drawTrend(items){
   const canvas = document.getElementById('chartHafalan');
+  if(!canvas) return;
   const ctx = canvas.getContext('2d');
   const W=canvas.width, H=canvas.height, pad=30;
   ctx.clearRect(0,0,W,H);
