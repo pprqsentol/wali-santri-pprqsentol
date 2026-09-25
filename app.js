@@ -187,6 +187,14 @@ const KET_REKAP_BULANAN = `<p class="muted" style="margin:6px 0 10px">Detail har
 
 function rupiah(n){ return 'Rp ' + (n||0).toLocaleString('id-ID'); }
 function totalHalaman(h){ return (h.juz-1)*20 + h.halaman; }
+// Pecah tanggal "YYYY-MM-DD" jadi {d:'07', m:'SEP'} untuk kolom tanggal ringkas
+// ala aplikasi dompet digital (dipakai di baris riwayat/hafalan/absensi).
+const BULAN_PENDEK = ['JAN','FEB','MAR','APR','MEI','JUN','JUL','AGU','SEP','OKT','NOV','DES'];
+function tglPendek(tgl){
+  if(!tgl) return { d:'-', m:'' };
+  const [y,m,d] = String(tgl).slice(0,10).split('-').map(Number);
+  return { d: String(d).padStart(2,'0'), m: BULAN_PENDEK[(m||1)-1]||'' };
+}
 
 /* ---------- NOTIF GETAR + BUNYI (scan berhasil & login berhasil) ----------
    Getar lewat Vibration API (didukung sebagian besar HP Android; di iPhone/Safari
@@ -773,28 +781,36 @@ function renderBeranda(){
 }
 
 /* ---------- INFO ---------- */
+// Tiap baris info dikasih ikon & warna sendiri (mirip pola icon-circle di
+// Beranda) supaya halaman Info ikut hidup, bukan cuma tabel abu-abu polos.
+const INFO_ROWS = [
+  { key:'nama', icon:'&#128100;', color:'green', label:'Nama' },
+  { key:'noInduk', icon:'&#128273;', color:'blue', label:'No. Induk' },
+  { key:'tetala', icon:'&#127881;', color:'purple', label:'Tetala' },
+  { key:'alamat', icon:'&#127968;', color:'amber', label:'Alamat' },
+  { key:'tglMasuk', icon:'&#128197;', color:'rose', label:'Tanggal masuk' },
+  { key:'kelas', icon:'&#127891;', color:'blue', label:'Kelas' },
+  { key:'kamar', icon:'&#128716;', color:'purple', label:'Kamar' },
+  { key:'program', icon:'&#128214;', color:'green', label:'Program' }
+];
 function renderInfo(){
   const s = mySantri();
   document.getElementById('content').innerHTML = `
-    <h2>Informasi Santri</h2>
-    <div class="card">
-      <table>
-        <tr><th>Nama</th><td>${escapeHtml(s.nama)}</td></tr>
-        <tr><th>No. Induk</th><td>${escapeHtml(s.noInduk)}</td></tr>
-        <tr><th>Tetala</th><td>${escapeHtml(s.tetala)||'-'}</td></tr>
-        <tr><th>Alamat</th><td>${escapeHtml(s.alamat)||'-'}</td></tr>
-        <tr><th>Tanggal masuk</th><td>${s.tglMasuk||'-'}</td></tr>
-        <tr><th>Kelas</th><td>${escapeHtml(s.kelas)||'-'}</td></tr>
-        <tr><th>Kamar</th><td>${escapeHtml(s.kamar)||'-'}</td></tr>
-        <tr><th>Program</th><td>${escapeHtml(s.program)||'-'}</td></tr>
-      </table>
+    <div class="page-head"><h2>Informasi Santri</h2><p class="muted">Data diri &amp; wali/mahram yang terdaftar</p></div>
+    <div class="section-title"><span class="dot"></span>Data Diri</div>
+    <div class="card info-list">
+      ${INFO_ROWS.map(r=>`
+        <div class="info-row">
+          <span class="icon-circle ${r.color}">${r.icon}</span>
+          <div class="info-text"><div class="label">${r.label}</div><div class="value">${escapeHtml(s[r.key])||'-'}</div></div>
+        </div>`).join('')}
     </div>
+    <div class="section-title"><span class="dot"></span>Mahram (${(s.mahram||[]).length})</div>
     <div class="card">
-      <div class="card-title">Mahram</div>
       ${(s.mahram||[]).length===0?'<p class="muted">Belum ada data.</p>':s.mahram.map(m=>`
         <div class="list-item">
           ${m.foto?`<img class="avatar" src="${m.foto}">`:`<div class="avatar">${escapeHtml((m.nama||'?').slice(0,2).toUpperCase())}</div>`}
-          <div><div class="name">${escapeHtml(m.nama)}</div><div class="sub">${escapeHtml(m.hubungan)} &middot; ${escapeHtml(m.hp)}</div></div>
+          <div><div class="name">${escapeHtml(m.nama)}</div><div class="sub">${escapeHtml(m.hubungan)} &middot; ${escapeHtml(m.hp)||'-'}</div></div>
         </div>`).join('')}
     </div>
   `;
@@ -833,11 +849,15 @@ function renderRiwayat(){
   const totalPerJenis = {};
   rekapSaldoTahunIni.forEach(r=>{ totalPerJenis[r.jenis] = (totalPerJenis[r.jenis]||0) + r.totalNominal; });
   const totalBelanjaTahunIni = rekapTokoTahunIni.reduce((sum,r)=>sum+r.totalBelanja,0);
+  // Ikon & warna icon-circle beda per jenis transaksi (top up hijau, tarik
+  // ungu, bayar/iuran oranye) supaya baris riwayat langsung kebaca sekilas
+  // tanpa perlu baca teks jenisnya dulu.
+  const IKON_TX = { setoran:{ic:'&#8595;',c:'green'}, tarik:{ic:'&#8593;',c:'purple'}, bayar:{ic:'&#128179;',c:'amber'} };
   document.getElementById('content').innerHTML = `
-    <h2>Riwayat &amp; Saldo</h2>
-    <div class="card stat green" style="text-align:center;margin-bottom:12px">
-      <div class="num" style="font-size:26px">${rupiah(s.saldo)}</div>
-      <div class="label">Saldo saat ini</div>
+    <div class="page-head"><h2>Riwayat &amp; Saldo</h2></div>
+    <div class="profile-card" style="padding:20px 18px">
+      <div class="muted-invert" style="margin-bottom:4px">Saldo saat ini</div>
+      <div style="font-size:28px;font-weight:800">${rupiah(s.saldo)}</div>
     </div>
     <div class="card grid2">
       <div>
@@ -865,14 +885,25 @@ function renderRiwayat(){
       `:''}
     </div>
     ${riwPeriode==='tahun'?'':`
-    <div class="card">
-      ${all.length===0?'<p class="muted">Tidak ada transaksi pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Jenis</th><th>Keterangan</th><th>Nominal</th></tr>
-      ${all.map(t=>`<tr><td>${t.tanggal}</td><td>${t.jenis}</td><td>${escapeHtml(t.ket)||'-'}</td><td style="color:${t.jumlah<0?'#c0392b':'#2f7d4f'}">${t.jumlah<0?'-':'+'}${rupiah(Math.abs(t.jumlah))}</td></tr>`).join('')}</table>`}
+    <div class="section-title"><span class="dot"></span>Transaksi Saldo</div>
+    <div class="card tx-list">
+      ${all.length===0?'<p class="muted">Tidak ada transaksi pada periode ini.</p>':all.slice().reverse().map(t=>{
+        const ik = IKON_TX[t.kategori]||{ic:'&#8226;',c:'blue'};
+        return `<div class="tx-item">
+          <span class="icon-circle ${ik.c}">${ik.ic}</span>
+          <div class="tx-mid"><div class="tx-title">${escapeHtml(t.jenis)}</div><div class="tx-sub">${t.tanggal} &middot; ${escapeHtml(t.ket)||'-'}</div></div>
+          <div class="tx-amt ${t.jumlah<0?'minus':'plus'}">${t.jumlah<0?'-':'+'}${rupiah(Math.abs(t.jumlah))}</div>
+        </div>`;
+      }).join('')}
     </div>
-    <div class="card">
-      <div class="card-title">Belanja di Toko</div>
-      ${belanja.length===0?'<p class="muted">Belum ada transaksi belanja di Toko pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Item</th><th>Total</th><th>Metode</th><th>Status</th></tr>
-      ${belanja.map(t=>`<tr><td>${(t.createdAt||'').slice(0,10)}</td><td>${(t.items||[]).map(i=>`${escapeHtml(i.nama_produk||i.namaProduk)} x${i.qty}`).join(', ')||'-'}</td><td>${rupiah(t.total)}</td><td>${escapeHtml(t.metode)}</td><td>${t.statusBayar==='lunas'?'Lunas':'Hutang'}</td></tr>`).join('')}</table>`}
+    <div class="section-title"><span class="dot"></span>Belanja di Toko</div>
+    <div class="card tx-list">
+      ${belanja.length===0?'<p class="muted">Belum ada transaksi belanja di Toko pada periode ini.</p>':belanja.map(t=>`
+        <div class="tx-item">
+          <span class="icon-circle rose">&#128722;</span>
+          <div class="tx-mid"><div class="tx-title">${(t.items||[]).map(i=>`${escapeHtml(i.nama_produk||i.namaProduk)} x${i.qty}`).join(', ')||'-'}</div><div class="tx-sub">${(t.createdAt||'').slice(0,10)} &middot; ${escapeHtml(t.metode)} &middot; ${t.statusBayar==='lunas'?'Lunas':'Hutang'}</div></div>
+          <div class="tx-amt minus">-${rupiah(t.total)}</div>
+        </div>`).join('')}
     </div>
     `}
     ${riwPeriode!=='tahun'?'':`
@@ -915,17 +946,15 @@ function renderAbsensi(){
   // per kegiatan per tanggal, tidak cuma rekap persentase hadir saja.
   const rincian = items.slice().sort((a,b)=> b.tanggal.localeCompare(a.tanggal) || (a.kegiatanId||'').localeCompare(b.kegiatanId||''));
   document.getElementById('content').innerHTML = `
-    <h2>Absensi</h2>
+    <div class="page-head"><h2>Absensi</h2></div>
     ${tabsPeriode(absMode, 'setAbsPeriode')}
     <div class="card grid2">
       <div><label>Dari tanggal</label><input type="date" value="${absFrom}" onchange="absFrom=this.value; absMode=''; renderAbsensi()"></div>
       <div><label>Sampai tanggal</label><input type="date" value="${absTo}" onchange="absTo=this.value; absMode=''; renderAbsensi()"></div>
     </div>
     ${absMode==='tahun'?'':`
-    <div class="card">
-      <div class="card-title">Ringkasan per kegiatan</div>
-      ${Object.keys(byKegiatan).length===0?'<p class="muted">Belum ada data absensi pada periode ini.</p>':`<table class="tbl-absensi">
-      <tr><th>Kegiatan</th><th class="c">Hadir</th><th class="c">Izin</th><th class="c">Alpha</th><th class="c">%</th></tr>
+    <div class="section-title"><span class="dot"></span>Ringkasan per kegiatan</div>
+    ${Object.keys(byKegiatan).length===0?'<div class="card"><p class="muted">Belum ada data absensi pada periode ini.</p></div>':`<div class="kegiatan-grid">
       ${Object.keys(byKegiatan).map(kid=>{
         const kg = DB.kegiatan.find(k=>k.id===kid);
         const arr = byKegiatan[kid];
@@ -933,24 +962,30 @@ function renderAbsensi(){
         const izin = arr.filter(a=>a.status==='i').length;
         const alpha = arr.filter(a=>a.status==='a').length;
         const pct = Math.round(hadir/arr.length*100);
-        return `<tr>
-          <td>${kg?escapeHtml(kg.nama):'-'}</td>
-          <td class="c num-hadir">${hadir}</td>
-          <td class="c ${izin>0?'num-izin':'num-zero'}">${izin}</td>
-          <td class="c ${alpha>0?'num-alpha':'num-zero'}">${alpha}</td>
-          <td class="c">${pct}%</td>
-        </tr>`;
-      }).join('')}</table>`}
-    </div>
-    <div class="card">
-      <div class="card-title">Rincian per tanggal</div>
-      ${rincian.length===0?'<p class="muted">Belum ada data absensi pada periode ini.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Status</th></tr>
-      ${rincian.map(a=>{
+        return `<div class="kegiatan-card">
+          <div class="nm">${kg?escapeHtml(kg.nama):'-'}</div>
+          <div class="bar-bg"><div class="bar-fg" style="width:${pct}%"></div></div>
+          <div class="foot">
+            <span>Hadir <b class="num-hadir">${hadir}</b></span>
+            <span>Izin <b class="${izin>0?'num-izin':''}">${izin}</b></span>
+            <span>Alpha <b class="${alpha>0?'num-alpha':''}">${alpha}</b></span>
+            <span><b>${pct}%</b></span>
+          </div>
+        </div>`;
+      }).join('')}</div>`}
+    <div class="section-title"><span class="dot"></span>Rincian per tanggal</div>
+    <div class="card entry-list">
+      ${rincian.length===0?'<p class="muted">Belum ada data absensi pada periode ini.</p>':rincian.map(a=>{
         const kg = DB.kegiatan.find(k=>k.id===a.kegiatanId);
         const label = LABEL_STATUS_ABSEN[a.status] || a.status;
         const tagClass = TAG_STATUS_ABSEN[a.status] || 'tag-nontakhossus';
-        return `<tr><td>${a.tanggal}</td><td>${kg?escapeHtml(kg.nama):'-'}</td><td><span class="tag ${tagClass}">${label}</span></td></tr>`;
-      }).join('')}</table>`}
+        const tp = tglPendek(a.tanggal);
+        return `<div class="entry-row">
+          <div class="entry-date"><div class="d">${tp.d}</div><div class="m">${tp.m}</div></div>
+          <div class="entry-mid"><div class="t1">${kg?escapeHtml(kg.nama):'-'}</div></div>
+          <span class="tag ${tagClass}">${label}</span>
+        </div>`;
+      }).join('')}
     </div>
     `}
     ${absMode!=='tahun'?'':(()=>{
@@ -981,25 +1016,39 @@ function renderHafalan(){
   const murojaahItems = (DB.murojaah||[]).filter(m=>m.santriId===s.id && m.tanggal>=hfFrom && m.tanggal<=hfTo).sort((a,b)=>b.tanggal.localeCompare(a.tanggal));
   const tambah = items.length>=2 ? totalHalaman(items[items.length-1])-totalHalaman(items[0]) : 0;
   document.getElementById('content').innerHTML = `
-    <h2>Hafalan</h2>
+    <div class="page-head"><h2>Hafalan</h2></div>
     ${tabsPeriode(hfMode, 'setHfPeriode')}
     <div class="card grid2">
       <div><label>Dari tanggal</label><input type="date" value="${hfFrom}" onchange="hfFrom=this.value; hfMode=''; renderHafalan()"></div>
       <div><label>Sampai tanggal</label><input type="date" value="${hfTo}" onchange="hfTo=this.value; hfMode=''; renderHafalan()"></div>
     </div>
     ${hfMode==='tahun'?'':`
-    <div class="card stat"><div class="num">${tambah}</div><div class="label">Tambahan halaman pada periode ini</div></div>
+    <div class="metric-card"><span class="icon-circle purple">&#128214;</span><div><div class="num">${tambah} halaman</div><div class="label">Tambahan pada periode ini</div></div></div>
     <div class="card">
       <div class="card-title">Grafik tren</div>
       <canvas id="chartHafalan" width="600" height="200" style="width:100%;height:170px"></canvas>
     </div>
-    <div class="card">
-      <div class="card-title">Riwayat Hafalan</div>
-      ${items.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Halaman</th><th>Keterangan</th></tr>${items.slice().reverse().map(h=>`<tr><td>${h.tanggal}</td><td>${escapeHtml(namaKegiatan(h.kegiatanId))}</td><td>${h.juz}</td><td>${h.halaman}</td><td><span class="tag ${h.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(h.keterangan||'Lancar')}</span></td></tr>`).join('')}</table>`}
+    <div class="section-title"><span class="dot"></span>Riwayat Hafalan</div>
+    <div class="card entry-list">
+      ${items.length===0?'<p class="muted">Belum ada data.</p>':items.slice().reverse().map(h=>{
+        const tp = tglPendek(h.tanggal);
+        return `<div class="entry-row">
+          <div class="entry-date"><div class="d">${tp.d}</div><div class="m">${tp.m}</div></div>
+          <div class="entry-mid"><div class="t1">${escapeHtml(namaKegiatan(h.kegiatanId))}</div><div class="t2">Juz ${h.juz} &middot; Hal. ${h.halaman}</div></div>
+          <span class="tag ${h.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(h.keterangan||'Lancar')}</span>
+        </div>`;
+      }).join('')}
     </div>
-    <div class="card">
-      <div class="card-title">Riwayat Murojaah</div>
-      ${murojaahItems.length===0?'<p class="muted">Belum ada data.</p>':`<table><tr><th>Tanggal</th><th>Kegiatan</th><th>Juz</th><th>Cakupan</th><th>Keterangan</th></tr>${murojaahItems.map(m=>`<tr><td>${m.tanggal}</td><td>${escapeHtml(namaKegiatan(m.kegiatanId))}</td><td>${m.juz}</td><td>${escapeHtml(m.cakupan)}</td><td><span class="tag ${m.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(m.keterangan||'Lancar')}</span></td></tr>`).join('')}</table>`}
+    <div class="section-title"><span class="dot"></span>Riwayat Murojaah</div>
+    <div class="card entry-list">
+      ${murojaahItems.length===0?'<p class="muted">Belum ada data.</p>':murojaahItems.map(m=>{
+        const tp = tglPendek(m.tanggal);
+        return `<div class="entry-row">
+          <div class="entry-date"><div class="d">${tp.d}</div><div class="m">${tp.m}</div></div>
+          <div class="entry-mid"><div class="t1">${escapeHtml(namaKegiatan(m.kegiatanId))}</div><div class="t2">Juz ${m.juz} &middot; ${escapeHtml(m.cakupan)}</div></div>
+          <span class="tag ${m.keterangan==='Ulang'?'tag-izin':'tag-hadir'}">${escapeHtml(m.keterangan||'Lancar')}</span>
+        </div>`;
+      }).join('')}
     </div>
     `}
     ${hfMode!=='tahun'?'':(()=>{
@@ -1053,18 +1102,27 @@ function renderTagihan(){
   const { semua, belum, lunas } = dataTagihanIuran(s);
 
   document.getElementById('content').innerHTML = `
-    <h2>Tagihan &amp; Iuran</h2>
-    <p class="muted" style="margin-top:-6px">Semua tagihan &amp; iuran, apa pun periodenya</p>
+    <div class="page-head"><h2>Tagihan &amp; Iuran</h2><p class="muted">Semua tagihan &amp; iuran, apa pun periodenya</p></div>
     ${semua.length===0?`<div class="card"><p class="muted">Tidak ada tagihan atau iuran.</p></div>`:`
-    <div class="card">
-      <div class="card-title">Belum bayar (${belum.length})</div>
-      ${belum.length===0?'<p class="muted">Semua tagihan sudah lunas. &#127881;</p>':`<table><tr><th>Nama</th><th>Nominal</th><th>Status</th></tr>
-      ${belum.map(r=>`<tr><td>${escapeHtml(r.nama)}</td><td>${rupiah(r.jumlah)}</td><td><span class="tag tag-belum">Belum bayar</span></td></tr>`).join('')}</table>`}
+    <div class="section-title"><span class="dot"></span>Belum bayar (${belum.length})</div>
+    <div class="card bill-list">
+      ${belum.length===0?'<p class="muted">Semua tagihan sudah lunas. &#127881;</p>':belum.map(r=>`
+        <div class="bill-row">
+          <span class="icon-circle rose">&#9203;</span>
+          <div class="bill-mid"><div class="nm">${escapeHtml(r.nama)}</div></div>
+          <span class="amt">${rupiah(r.jumlah)}</span>
+          <span class="tag tag-belum">Belum bayar</span>
+        </div>`).join('')}
     </div>
-    <div class="card">
-      <div class="card-title">Sudah lunas (${lunas.length})</div>
-      ${lunas.length===0?'<p class="muted">Belum ada yang lunas.</p>':`<table><tr><th>Nama</th><th>Nominal</th><th>Tgl. bayar</th><th>Status</th></tr>
-      ${lunas.map(r=>`<tr><td>${escapeHtml(r.nama)}</td><td>${rupiah(r.jumlah)}</td><td>${r.tglBayar||'-'}</td><td><span class="tag tag-lunas">Lunas</span></td></tr>`).join('')}</table>`}
+    <div class="section-title"><span class="dot"></span>Sudah lunas (${lunas.length})</div>
+    <div class="card bill-list">
+      ${lunas.length===0?'<p class="muted">Belum ada yang lunas.</p>':lunas.map(r=>`
+        <div class="bill-row">
+          <span class="icon-circle green">&#10004;</span>
+          <div class="bill-mid"><div class="nm">${escapeHtml(r.nama)}</div><div class="sub">${r.tglBayar||'-'}</div></div>
+          <span class="amt">${rupiah(r.jumlah)}</span>
+          <span class="tag tag-lunas">Lunas</span>
+        </div>`).join('')}
     </div>`}
   `;
 }

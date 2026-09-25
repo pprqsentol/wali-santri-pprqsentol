@@ -278,6 +278,88 @@ th{color:var(--muted);font-weight:600;font-size:12px;}
 .att-btn.a.on{background:#c0392b;color:#fff;border-color:#c0392b;}
 .att-btn.i.on{background:#d19a24;color:#fff;border-color:#d19a24;}
 
+/* ===== Komponen baru (2026) untuk tab selain Beranda: gaya "baris berikon"
+   ala aplikasi dompet digital (Kasgo/GoPay/Dana) -- dipakai untuk menggantikan
+   tabel polos di tab Info, Hafalan, Absensi, Tagihan, Riwayat, supaya seluruh
+   aplikasi konsisten dengan tampilan Beranda, bukan cuma halaman itu saja. */
+
+/* Judul section kecil di atas sekelompok kartu, dengan aksen garis warna di
+   kiri teks supaya tiap tab kelihatan lebih hidup, bukan cuma teks polos. */
+.section-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--green-700);margin:18px 2px 10px;text-transform:uppercase;letter-spacing:.3px;}
+.section-title:first-child{margin-top:2px;}
+.section-title .dot{width:8px;height:8px;border-radius:50%;background:var(--grad-green);flex-shrink:0;}
+
+/* Header halaman: judul besar + subjudul kecil, dipakai di semua tab
+   menggantikan <h2> polos supaya seragam & ada sedikit ruang napas. */
+.page-head{margin-bottom:14px;}
+.page-head h2{font-size:20px;font-weight:800;color:var(--text);}
+.page-head .muted{margin-top:2px;}
+
+/* Baris info (Info santri, Mahram) -- ikon bulat + label kecil + nilai besar,
+   dipakai menggantikan baris <tr><th>Label</th><td>Nilai</td></tr>. */
+.info-list{display:flex;flex-direction:column;gap:2px;}
+.info-row{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--border);}
+.info-row:last-child{border-bottom:none;}
+.info-row .icon-circle{width:38px;height:38px;font-size:16px;flex-shrink:0;}
+.info-row .info-text{flex:1;min-width:0;}
+.info-row .info-text .label{font-size:11.5px;color:var(--muted);}
+.info-row .info-text .value{font-size:14.5px;font-weight:700;color:var(--text);word-break:break-word;}
+
+/* Kartu ringkasan angka (mis. "Tambahan halaman", total absensi) versi lebih
+   segar dari .stat lama: ikon bulat + angka besar berwarna gradasi teks. */
+.metric-card{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px;box-shadow:var(--shadow-sm);margin-bottom:12px;}
+.metric-card .icon-circle{width:48px;height:48px;font-size:21px;}
+.metric-card .num{font-size:22px;font-weight:800;line-height:1.15;}
+.metric-card .label{font-size:12.5px;color:var(--muted);margin-top:1px;}
+
+/* Daftar transaksi/riwayat (Riwayat, Belanja Toko) -- baris dgn ikon,
+   keterangan, tanggal & nominal berwarna hijau(+)/merah(-) di kanan,
+   menggantikan <table> transaksi yang sebelumnya datar. */
+.tx-list{display:flex;flex-direction:column;}
+.tx-item{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--border);}
+.tx-item:last-child{border-bottom:none;}
+.tx-item .icon-circle{width:40px;height:40px;font-size:17px;flex-shrink:0;}
+.tx-item .tx-mid{flex:1;min-width:0;}
+.tx-item .tx-mid .tx-title{font-size:13.5px;font-weight:700;}
+.tx-item .tx-mid .tx-sub{font-size:11.5px;color:var(--muted);margin-top:1px;}
+.tx-item .tx-amt{font-size:14px;font-weight:800;white-space:nowrap;text-align:right;}
+.tx-amt.plus{color:#1a8f56;}
+.tx-amt.minus{color:#c0392b;}
+
+/* Kartu ringkasan per kegiatan di tab Absensi -- ganti tabel rekap jadi
+   kartu kecil dgn bar persentase kehadiran berwarna, biar sekilas kebaca. */
+.kegiatan-grid{display:grid;grid-template-columns:1fr;gap:10px;}
+@media (min-width:520px){.kegiatan-grid{grid-template-columns:1fr 1fr;}}
+.kegiatan-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px 14px;box-shadow:var(--shadow-sm);}
+.kegiatan-card .nm{font-size:13px;font-weight:700;margin-bottom:6px;}
+.kegiatan-card .bar-bg{background:var(--green-100);border-radius:20px;height:7px;overflow:hidden;margin:6px 0 8px;}
+.kegiatan-card .bar-fg{height:100%;border-radius:20px;background:var(--grad-green);}
+.kegiatan-card .foot{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);}
+.kegiatan-card .foot b{color:var(--text);}
+
+/* Baris tagihan/iuran -- ganti tabel jadi baris berikon lonceng/centang,
+   status lunas/belum sebagai tag warna di ujung kanan. */
+.bill-list{display:flex;flex-direction:column;}
+.bill-row{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--border);}
+.bill-row:last-child{border-bottom:none;}
+.bill-row .icon-circle{width:38px;height:38px;font-size:15px;flex-shrink:0;}
+.bill-row .bill-mid{flex:1;min-width:0;}
+.bill-row .bill-mid .nm{font-size:13.5px;font-weight:700;}
+.bill-row .bill-mid .sub{font-size:11.5px;color:var(--muted);margin-top:1px;}
+.bill-row .amt{font-size:13.5px;font-weight:800;margin-right:4px;white-space:nowrap;}
+
+/* Baris riwayat hafalan/absensi harian -- versi ringkas list-item, dipakai
+   menggantikan baris tabel yang sebelumnya polos di tab Hafalan/Absensi. */
+.entry-list{display:flex;flex-direction:column;}
+.entry-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--border);}
+.entry-row:last-child{border-bottom:none;}
+.entry-row .entry-date{width:56px;flex-shrink:0;text-align:center;}
+.entry-row .entry-date .d{font-size:15px;font-weight:800;color:var(--green-700);line-height:1.1;}
+.entry-row .entry-date .m{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;}
+.entry-row .entry-mid{flex:1;min-width:0;}
+.entry-row .entry-mid .t1{font-size:13.5px;font-weight:700;}
+.entry-row .entry-mid .t2{font-size:11.5px;color:var(--muted);margin-top:1px;}
+
 /* Printable card */
 .id-card{width:340px;height:214px;border-radius:14px;background:linear-gradient(135deg,#f4f5f0,#e4ece3);border:1px solid var(--border);padding:14px;position:relative;overflow:hidden;margin:0 auto;}
 .id-card .head{display:flex;align-items:center;gap:8px;}
