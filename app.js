@@ -186,7 +186,25 @@ function labelBulanDate(tgl){
 const KET_REKAP_BULANAN = `<p class="muted" style="margin:6px 0 10px">Detail harian tersedia untuk 30 hari terakhir. Untuk periode yang lebih lama, ditampilkan ringkasan per bulan berikut.</p>`;
 
 function rupiah(n){ return 'Rp ' + (n||0).toLocaleString('id-ID'); }
-function totalHalaman(h){ return (h.juz-1)*20 + h.halaman; }
+// Posisi hafalan dalam hitungan halaman kumulatif, mengikuti urutan juz pondok
+// (29, 30, 1, 2, ... 28 -- lihat JUZ_ORDER), 20 halaman per juz. Juz 29 hal. 17 = 17.
+function totalHalaman(h){ return (posisiJuz(h.juz)-1)*20 + h.halaman; }
+// Posisi hafalan TEPAT SEBELUM tanggal `dari`: setoran terakhir sebelum periode
+// (kalau masih ada di data 30 hari), kalau tidak ada dipakai rekap bulanan terakhir
+// sebelum bulan itu, kalau tidak ada juga dipakai hafalan_awal santri (halaman yang sudah
+// dihafal sebelum masuk; 0 kalau belum ada).
+function posisiSebelum(santriId, dari, hafalanAwal){
+  const sebelum = DB.hafalan.filter(h=>h.santriId===santriId && h.tanggal<dari);
+  if(sebelum.length){
+    const tglTerakhir = sebelum.reduce((a,h)=>h.tanggal>a?h.tanggal:a, '');
+    return Math.max(...sebelum.filter(h=>h.tanggal===tglTerakhir).map(totalHalaman));
+  }
+  const bulanDari = dari.slice(0,7);
+  const rekap = (DB.rekapHafalan||[]).filter(r=>String(r.bulan).slice(0,7)<bulanDari)
+    .sort((a,b)=>String(b.bulan).localeCompare(String(a.bulan)))[0];
+  if(rekap && rekap.juzAkhir && rekap.halamanAkhir) return totalHalaman({juz:rekap.juzAkhir, halaman:rekap.halamanAkhir});
+  return hafalanAwal||0;
+}
 // Pecah tanggal "YYYY-MM-DD" jadi {d:'07', m:'SEP'} untuk kolom tanggal ringkas
 // ala aplikasi dompet digital (dipakai di baris riwayat/hafalan/absensi).
 const BULAN_PENDEK = ['JAN','FEB','MAR','APR','MEI','JUN','JUL','AGU','SEP','OKT','NOV','DES'];
@@ -1014,7 +1032,15 @@ function renderHafalan(){
   // semua kegiatan murojaah (Murojaah 1/2/3, dst).
   const items = DB.hafalan.filter(h=>h.santriId===s.id && h.tanggal>=hfFrom && h.tanggal<=hfTo).sort((a,b)=>a.tanggal.localeCompare(b.tanggal));
   const murojaahItems = (DB.murojaah||[]).filter(m=>m.santriId===s.id && m.tanggal>=hfFrom && m.tanggal<=hfTo).sort((a,b)=>b.tanggal.localeCompare(a.tanggal));
-  const tambah = items.length>=2 ? totalHalaman(items[items.length-1])-totalHalaman(items[0]) : 0;
+  // Tambahan = posisi akhir periode - posisi SEBELUM periode dimulai (setoran pertama di
+  // periode ikut dihitung, bukan dijadikan titik nol). Kalau ada beberapa setoran di
+  // tanggal terakhir, dipakai yang paling maju.
+  let tambah = 0;
+  if(items.length){
+    const tglAkhir = items[items.length-1].tanggal;
+    const posAkhir = Math.max(...items.filter(h=>h.tanggal===tglAkhir).map(totalHalaman));
+    tambah = Math.max(0, posAkhir - posisiSebelum(s.id, hfFrom, s.hafalanAwal));
+  }
   document.getElementById('content').innerHTML = `
     <div class="page-head"><h2>Hafalan</h2></div>
     ${tabsPeriode(hfMode, 'setHfPeriode')}
