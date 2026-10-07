@@ -279,11 +279,31 @@ async function doLogin(){
    supaya cuma data santri milik wali yang login yang boleh terbaca). Kalau offline dan
    sebelumnya pernah berhasil login (ME ada), pakai cadangan terakhir supaya tetap bisa
    dilihat -- tapi TIDAK bisa dipakai untuk login pertama kali (harus online dulu sekali). */
+/* Hemat request & hindari batas login: dulu SETIAP sinkron memanggil signInWithPassword (sesi baru + catatan
+   log auth tiap kali, dan ada batas jumlah login per IP). Sekarang sesi yang masih berlaku dipakai ulang;
+   login ulang hanya kalau belum ada sesi (halaman baru dibuka), token hampir habis, akun berbeda, atau
+   login terakhir sudah lebih dari FULL_RESYNC_MS (6 jam, supaya kode wali yang diganti admin tetap ketahuan).
+   Mengembalikan null kalau sesi siap, atau objek error kalau login gagal. */
+async function pastikanSesiWali(noInduk, kodeWali){
+  const emailTarget = emailWaliDari(noInduk);
+  try{
+    const { data } = await sb.auth.getSession();
+    const sesi = data && data.session;
+    const loginTs = Number(sessionStorage.getItem('wali_login_ts') || 0);
+    const masihSegar = loginTs > 0 && (Date.now() - loginTs) < FULL_RESYNC_MS;
+    const tokenMasihLama = sesi && (Number(sesi.expires_at || 0) * 1000 - Date.now()) > 60000;
+    if(sesi && sesi.user && (sesi.user.email || '').toLowerCase() === emailTarget && masihSegar && tokenMasihLama){
+      return null;
+    }
+  }catch(e){ /* kalau pengecekan sesi gagal, jatuh ke login biasa di bawah */ }
+  const { error } = await sb.auth.signInWithPassword({ email: emailTarget, password: kodeWali });
+  if(!error) sessionStorage.setItem('wali_login_ts', String(Date.now()));
+  return error || null;
+}
+
 async function muatDataWali(noInduk, kodeWali, izinkanCache){
   try{
-    const { error: authError } = await sb.auth.signInWithPassword({
-      email: emailWaliDari(noInduk), password: kodeWali
-    });
+    const authError = await pastikanSesiWali(noInduk, kodeWali);
     if(authError){
       if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
       return false;
@@ -590,6 +610,7 @@ async function tutupScanner(){
 async function logout(){
   await sb.auth.signOut();
   sessionStorage.removeItem('wali_session');
+  sessionStorage.removeItem('wali_login_ts');
   ME = null;
   document.getElementById('app').style.display='none';
   document.getElementById('loginScreen').style.display='flex';

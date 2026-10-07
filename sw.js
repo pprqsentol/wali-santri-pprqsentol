@@ -10,7 +10,7 @@
    app.js, styles.css) dilayani network-first, bukan cache-first, supaya
    perbaikan langsung berlaku begitu online -- cache cuma dipakai kalau benar-
    benar offline. Ikon/manifest tetap cache-first karena jarang berubah. */
-const CACHE = 'wali-rq-v2';
+const CACHE = 'wali-rq-v3-sesi';
 const APP_SHELL = ['./', './index.html', './styles.css', './app.js', './manifest.json'];
 const STATIC_ASSETS = ['./icon-192.png', './icon-512.png'];
 
