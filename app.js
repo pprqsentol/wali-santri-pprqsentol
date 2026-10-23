@@ -113,7 +113,7 @@ function dalamCamel(obj){
 const CACHE_KEY = 'wali_cache_v2'; // cadangan tampilan terakhir saja (bukan sumber data utama), supaya tetap bisa dilihat sebentar walau lagi tidak ada internet
 const SYNC_TS_KEY = 'wali_last_sync_v2'; // kapan terakhir kali BERHASIL narik data lengkap dari Supabase -- juga dipakai sebagai "cursor" delta sync (updated_at >= ini)
 const FULL_SYNC_TS_KEY = 'wali_last_full_sync_v2'; // kapan terakhir kali sync PENUH (bukan delta) berhasil
-const MIN_SYNC_MS = 3 * 60 * 1000; // 3 menit -- jarak minimal antar sync (delta ataupun penuh)
+const MIN_SYNC_MS = 10 * 60 * 1000; // 10 menit -- jarak minimal antar sync (delta ataupun penuh); makin jarang sync, makin sedikit baris log & egress di Supabase
 const FULL_RESYNC_MS = 6 * 60 * 60 * 1000; // 6 jam -- jaring pengaman: delta sync (berdasar updated_at) tidak
   // bisa tahu kalau ada baris yang betul-betul DIHAPUS (bukan diedit) di server, atau baris yang
   // status-nya berubah sampai keluar dari filter (misal transaksi_saldo status aktif->dibatalkan).
@@ -332,7 +332,16 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
     // baru saja sync di sesi ini) -- dipakai sebagai dasar gabungan kalau sync ini DELTA.
     const basis = ambilCache() || DB;
     const cursorTs = waktuSyncTerakhirTs();
-    const perluFull = !waktuFullSyncTerakhirTs() || (Date.now() - waktuFullSyncTerakhirTs() > FULL_RESYNC_MS);
+    // Cadangan lama (sebelum ada field 'st' di absensi) dipaksa sync PENUH sekali, supaya banner
+    // "anak sakit" tidak salah hitung gara-gara baris lama yang belum punya status asli.
+    const cacheAbsensiLama = (basis.absensi||[]).some(a=>a.st===undefined);
+    const cacheKosong = !(basis.santri && basis.santri.length); // tanda waktu sync ada tapi isi cadangan hilang -> tidak bisa delta
+    const perluFull = cacheKosong || cacheAbsensiLama || !waktuFullSyncTerakhirTs() || (Date.now() - waktuFullSyncTerakhirTs() > FULL_RESYNC_MS);
+    // Data yang jarang berubah (mahram, kegiatan, jenis tagihan, 5 rekap bulanan) HANYA ditarik saat
+    // sync PENUH (maks. tiap 6 jam). Di sync delta, query-nya tidak dikirim sama sekali (builder
+    // supabase-js baru jalan kalau di-await) dan hasil sync sebelumnya dipakai ulang dari 'basis'.
+    // Ini memangkas 8 dari 17 request per sinkron => baris log & egress jauh lebih sedikit.
+    const lambat = q => perluFull ? q : Promise.resolve({ data: null });
     const cursorIso = (!perluFull && cursorTs) ? new Date(cursorTs).toISOString() : null;
 
     // 5 query volume terbesar (absensi/hafalan/murojaah/transaksi_saldo/transaksi_toko) dibuat
@@ -361,25 +370,25 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       { data: rekapAbsensiRows }, { data: rekapHafalanRows }, { data: rekapMurojaahRows },
       { data: rekapSaldoRows }, { data: rekapTokoRows }
     ] = await Promise.all([
-      sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url,foto_thumb_url').eq('santri_id', s.id),
-      sb.from('kegiatan').select('id,nama,program_khusus').eq('aktif', true),
+      lambat(sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url,foto_thumb_url').eq('santri_id', s.id)),
+      lambat(sb.from('kegiatan').select('id,nama,program_khusus').eq('aktif', true)),
       // Tes Kenaikan Juz -- barisnya sedikit (hanya tiap juz/blok 10 juz tuntas), jadi
       // ditarik PENUH tiap loadAll() (bukan didelta), supaya notice "tes 10 juz, wali harus
       // ke pondok" selalu muncul akurat begitu pembina mencatatnya.
       sb.from('tes_kenaikan_juz').select('id,santri_id,juz_selesai,kategori,syarat_juz,tanggal_mulai,batas_hari,status,tanggal_lulus,wali_hadir').eq('santri_id', s.id),
       qAbsensi, qHafalan, qMurojaah, qSaldo, qToko,
       sb.from('tagihan').select('id,santri_id,jenis_tagihan_id,bulan,jumlah,status,tgl_bayar').eq('santri_id', s.id),
-      sb.from('jenis_tagihan').select('id,nama'),
+      lambat(sb.from('jenis_tagihan').select('id,nama')),
       sb.from('iuran_detail').select('id, santri_id, jumlah, status, tgl_bayar, iuran(tanggal, keterangan)').eq('santri_id', s.id),
       // Saldo SEKARANG dihitung server-side (view saldo_santri, sama seperti dipakai Aplikasi
       // Toko/Kasir) -- bukan lagi dijumlah dari transaksi_saldo di JS, karena transaksi_saldo
       // yang ditarik sekarang cuma 30 hari terakhir (tidak cukup buat hitung total saldo).
       sb.from('saldo_santri').select('saldo').eq('santri_id', s.id).maybeSingle(),
-      sb.from('rekap_absensi_bulanan').select('bulan,hadir,izin,sakit,alpha,total').eq('santri_id', s.id).order('bulan', { ascending: false }),
-      sb.from('rekap_hafalan_bulanan').select('bulan,jumlah_setoran,juz_akhir,halaman_akhir').eq('santri_id', s.id).order('bulan', { ascending: false }),
-      sb.from('rekap_murojaah_bulanan').select('bulan,jumlah_setoran,juz_terakhir').eq('santri_id', s.id).order('bulan', { ascending: false }),
-      sb.from('rekap_saldo_bulanan').select('bulan,jenis,jumlah_transaksi,total_nominal').eq('santri_id', s.id).order('bulan', { ascending: false }),
-      sb.from('rekap_toko_bulanan').select('bulan,jumlah_transaksi,total_belanja').eq('santri_id', s.id).order('bulan', { ascending: false })
+      lambat(sb.from('rekap_absensi_bulanan').select('bulan,hadir,izin,sakit,alpha,total').eq('santri_id', s.id).order('bulan', { ascending: false })),
+      lambat(sb.from('rekap_hafalan_bulanan').select('bulan,jumlah_setoran,juz_akhir,halaman_akhir').eq('santri_id', s.id).order('bulan', { ascending: false })),
+      lambat(sb.from('rekap_murojaah_bulanan').select('bulan,jumlah_setoran,juz_terakhir').eq('santri_id', s.id).order('bulan', { ascending: false })),
+      lambat(sb.from('rekap_saldo_bulanan').select('bulan,jenis,jumlah_transaksi,total_nominal').eq('santri_id', s.id).order('bulan', { ascending: false })),
+      lambat(sb.from('rekap_toko_bulanan').select('bulan,jumlah_transaksi,total_belanja').eq('santri_id', s.id).order('bulan', { ascending: false }))
     ]);
 
     // Bentuk ulang jadi persis nama field yang dipakai di seluruh app.js ini
@@ -387,7 +396,9 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
     // Dipakai versi thumbnail (foto_thumb_url / foto_wali_thumb_url) supaya avatar kecil
     // di app ini tidak menarik file full-size dari storage -- ini salah satu penyebab
     // egress v2 membengkak. Fallback ke foto_url/foto_wali kalau thumbnail-nya belum ada.
-    const mahram = (mahramRows||[]).map(m=>({ id:m.id, nama:m.nama, hubungan:m.hubungan||'', hp:m.no_hp||'', foto:m.foto_thumb_url||m.foto_url||'' }));
+    const mahram = perluFull
+      ? (mahramRows||[]).map(m=>({ id:m.id, nama:m.nama, hubungan:m.hubungan||'', hp:m.no_hp||'', foto:m.foto_thumb_url||m.foto_url||'' }))
+      : (basis.mahram || []);
     DB = {
       santri: [{
         id: s.id, nama: s.nama, noInduk: s.no_induk, foto: s.foto_thumb_url||s.foto_url||'',
@@ -399,7 +410,7 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
         mahram
       }],
       mahram,
-      kegiatan: (kegiatanRows||[]).map(k=>({ id:k.id, nama:k.nama, programKhusus:k.program_khusus })),
+      kegiatan: perluFull ? (kegiatanRows||[]).map(k=>({ id:k.id, nama:k.nama, programKhusus:k.program_khusus })) : (basis.kegiatan || []),
       tesKenaikanJuz: (tesJuzRows||[]).map(t=>({
         id:t.id, juzSelesai:t.juz_selesai, kategori:t.kategori, syaratJuz:t.syarat_juz,
         tanggalMulai:t.tanggal_mulai, batasHari:t.batas_hari, status:t.status,
@@ -414,7 +425,10 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       absensi: (()=>{
         const barus = (absensiRows||[]).map(a=>({
           id:a.id, santriId:a.santri_id, kegiatanId:a.kegiatan_id, tanggal:a.tanggal,
-          status: a.status==='Hadir' ? 'h' : (a.status==='Izin' ? 'i' : 'a')
+          status: a.status==='Hadir' ? 'h' : (a.status==='Izin' ? 'i' : 'a'),
+          // status asli ('Hadir'/'Izin'/'Sakit'/'Alpha'/'Haid') -- dipakai banner "anak sakit" di beranda,
+          // karena kode status h/i/a di atas menggabungkan Sakit & Haid ke 'a' (tidak bisa dibedakan).
+          st: a.status
         }));
         return perluFull ? barus : gabungTrim(basis.absensi, barus, cutoffTgl, 'tanggal');
       })(),
@@ -435,18 +449,18 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
         return perluFull ? barus : gabungTrim(basis.transaksiToko, barus, cutoffTgl, 'createdAt');
       })(),
       tagihan: (tagihanRows||[]).map(t=>({ id:t.id, santriId:t.santri_id, jenisTagihanId:t.jenis_tagihan_id, bulan:t.bulan, jumlah:t.jumlah, status:t.status, tglBayar:t.tgl_bayar })),
-      jenisTagihan: (jenisTagihanRows||[]).map(j=>({ id:j.id, nama:j.nama })),
+      jenisTagihan: perluFull ? (jenisTagihanRows||[]).map(j=>({ id:j.id, nama:j.nama })) : (basis.jenisTagihan || []),
       iuranDetail: (iuranDetailRows||[]).map(d=>({
         id:d.id, santriId:d.santri_id, jumlah:d.jumlah, status:d.status, tglBayar:d.tgl_bayar,
         tanggal: d.iuran ? d.iuran.tanggal : null, keterangan: d.iuran ? d.iuran.keterangan : null
       })),
       // Rekap per bulan -- dipakai untuk menampilkan riwayat sebelum 30 hari terakhir
       // (lihat cutoffTgl di atas), tanpa perlu narik detail baris satu-satu.
-      rekapAbsensi: (rekapAbsensiRows||[]).map(r=>({ bulan:r.bulan, hadir:r.hadir, izin:r.izin, sakit:r.sakit, alpha:r.alpha, total:r.total })),
-      rekapHafalan: (rekapHafalanRows||[]).map(r=>({ bulan:r.bulan, jumlahSetoran:r.jumlah_setoran, juzAkhir:r.juz_akhir, halamanAkhir:r.halaman_akhir })),
-      rekapMurojaah: (rekapMurojaahRows||[]).map(r=>({ bulan:r.bulan, jumlahSetoran:r.jumlah_setoran, juzTerakhir:r.juz_terakhir })),
-      rekapSaldo: (rekapSaldoRows||[]).map(r=>({ bulan:r.bulan, jenis:r.jenis, jumlahTransaksi:r.jumlah_transaksi, totalNominal:r.total_nominal })),
-      rekapToko: (rekapTokoRows||[]).map(r=>({ bulan:r.bulan, jumlahTransaksi:r.jumlah_transaksi, totalBelanja:r.total_belanja }))
+      rekapAbsensi: perluFull ? (rekapAbsensiRows||[]).map(r=>({ bulan:r.bulan, hadir:r.hadir, izin:r.izin, sakit:r.sakit, alpha:r.alpha, total:r.total })) : (basis.rekapAbsensi || []),
+      rekapHafalan: perluFull ? (rekapHafalanRows||[]).map(r=>({ bulan:r.bulan, jumlahSetoran:r.jumlah_setoran, juzAkhir:r.juz_akhir, halamanAkhir:r.halaman_akhir })) : (basis.rekapHafalan || []),
+      rekapMurojaah: perluFull ? (rekapMurojaahRows||[]).map(r=>({ bulan:r.bulan, jumlahSetoran:r.jumlah_setoran, juzTerakhir:r.juz_terakhir })) : (basis.rekapMurojaah || []),
+      rekapSaldo: perluFull ? (rekapSaldoRows||[]).map(r=>({ bulan:r.bulan, jenis:r.jenis, jumlahTransaksi:r.jumlah_transaksi, totalNominal:r.total_nominal })) : (basis.rekapSaldo || []),
+      rekapToko: perluFull ? (rekapTokoRows||[]).map(r=>({ bulan:r.bulan, jumlahTransaksi:r.jumlah_transaksi, totalBelanja:r.total_belanja })) : (basis.rekapToko || [])
     };
     // saldo santri = total transaksi_saldo berstatus 'aktif' saja (SEMUA histori, dihitung
     // di server lewat view saldo_santri -- persis logika yang sama dipakai Aplikasi
@@ -770,6 +784,75 @@ function kartuTesKenaikan(){
       <p class="muted" style="margin:0">${batasTeks}</p>
     </div>`;
 }
+/* ---------- BANNER "ANAK SAKIT" (beranda) ----------
+   Sumber: tabel absensi (tanpa tabel baru, tanpa query tambahan). Aturan:
+   - Hari "sakit penuh" = ada minimal 1 kegiatan berstatus Sakit, TIDAK ada Hadir, TIDAK ada Alpha,
+     dan jumlah Sakit > jumlah Izin. Status Haid diabaikan (tidak dihitung apa-apa & tidak pernah
+     ditampilkan).
+   - Hari ini baru dinilai mulai jam 20.00 WIB (absensi hari itu sudah lengkap); hari-hari
+     sebelumnya langsung dinilai.
+   - Hari sakit penuh yang berurutan digabung jadi satu rentang tanggal.
+   - Banner hilang begitu ada status Hadir pada hari setelah hari sakit terakhir (kapan pun
+     hari itu, tanpa menunggu jam 20.00). Pengaman: kalau tidak ada Hadir pun, banner berhenti
+     tampil setelah MAKS_HARI_BANNER_SAKIT hari dari hari sakit terakhir (mis. absensi tidak diinput).
+   Fungsi di antara dua penanda di bawah murni (tanpa DOM) supaya bisa diuji terpisah. */
+/* BANNER-SAKIT-MULAI */
+const JAM_BANNER_SAKIT = 20; // WIB
+const MAKS_HARI_BANNER_SAKIT = 3;
+const BULAN_SINGKAT = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+function tanggalWib(d){ return new Intl.DateTimeFormat('en-CA', { timeZone:'Asia/Jakarta' }).format(d); }
+function jamWib(d){ return Number(new Intl.DateTimeFormat('en-GB', { timeZone:'Asia/Jakarta', hour:'2-digit', hour12:false }).format(d)) % 24; }
+function hitungBannerSakit(absensi, santriId, sekarang){
+  sekarang = sekarang || new Date();
+  const hariIni = tanggalWib(sekarang);
+  const sudahMalam = jamWib(sekarang) >= JAM_BANNER_SAKIT;
+  const perHari = {};
+  (absensi||[]).forEach(a=>{
+    if(!a || a.santriId!==santriId || !a.st) return;
+    const t = String(a.tanggal).slice(0,10);
+    const h = perHari[t] || (perHari[t] = { Hadir:0, Sakit:0, Izin:0, Alpha:0 });
+    if(h[a.st]!==undefined) h[a.st]++;
+  });
+  const penuhSakit = t => { const h = perHari[t]; return !!h && h.Sakit>0 && h.Hadir===0 && h.Alpha===0 && h.Sakit>h.Izin; };
+  const dinilai = t => t < hariIni || (t===hariIni && sudahMalam);
+  const hariSakit = Object.keys(perHari).filter(t=>dinilai(t) && penuhSakit(t)).sort();
+  if(!hariSakit.length) return null;
+  const akhir = hariSakit[hariSakit.length-1];
+  if(geserTanggalStr(akhir, { hari: MAKS_HARI_BANNER_SAKIT }) < hariIni) return null;
+  if(Object.keys(perHari).some(t=>t>akhir && t<=hariIni && perHari[t].Hadir>0)) return null;
+  let mulai = akhir;
+  while(penuhSakit(geserTanggalStr(mulai, { hari:-1 }))) mulai = geserTanggalStr(mulai, { hari:-1 });
+  return { mulai, akhir };
+}
+function labelRentangBanner(mulai, akhir){
+  const [y1,m1,d1] = mulai.split('-').map(Number);
+  const [y2,m2,d2] = akhir.split('-').map(Number);
+  if(mulai===akhir) return `${d2} ${BULAN_SINGKAT[m2-1]} ${y2}`;
+  if(y1===y2 && m1===m2) return `${d1}–${d2} ${BULAN_SINGKAT[m2-1]} ${y2}`;
+  if(y1===y2) return `${d1} ${BULAN_SINGKAT[m1-1]} – ${d2} ${BULAN_SINGKAT[m2-1]} ${y2}`;
+  return `${d1} ${BULAN_SINGKAT[m1-1]} ${y1} – ${d2} ${BULAN_SINGKAT[m2-1]} ${y2}`;
+}
+/* BANNER-SAKIT-SELESAI */
+function htmlBannerSakit(s){
+  const b = hitungBannerSakit(DB.absensi, s.id);
+  if(!b) return '';
+  return `<div class="banner-sakit" role="status">
+      <span class="banner-sakit-ic">&#129298;</span>
+      <span class="banner-sakit-text"><strong>Ananda sakit</strong><span>Tercatat tidak mengikuti kegiatan seharian pada ${labelRentangBanner(b.mulai, b.akhir)}.</span></span>
+    </div>`;
+}
+// Dipanggil ulang tiap menit & saat app kembali dibuka, supaya banner muncul tepat jam 20.00 / hilang
+// begitu ada Hadir, walau halaman beranda sedang terbuka dan tidak dirender ulang.
+function perbaruiBannerSakit(){
+  const el = document.getElementById('bannerSakit');
+  if(!el || !ME) return;
+  const s = mySantri();
+  if(!s) return;
+  const html = htmlBannerSakit(s);
+  if(el.innerHTML!==html) el.innerHTML = html;
+}
+setInterval(perbaruiBannerSakit, 60000);
+
 function renderBeranda(){
   const s = mySantri();
   const lastHafalan = DB.hafalan.filter(h=>h.santriId===s.id).sort((a,b)=>b.tanggal.localeCompare(a.tanggal))[0];
@@ -789,6 +872,8 @@ function renderBeranda(){
       <p class="muted-invert">No. induk ${escapeHtml(s.noInduk)} &middot; ${escapeHtml(s.kelas)||'-'}</p>
       <span class="tag ${s.program==='Takhossus'?'tag-takhossus':'tag-nontakhossus'}">${escapeHtml(s.program)||'-'}</span>
     </div>
+
+    <div id="bannerSakit">${htmlBannerSakit(s)}</div>
 
     ${kartuTesKenaikan()}
 
@@ -1190,6 +1275,7 @@ async function muatUlang(){
 document.addEventListener('visibilitychange', ()=>{
   if(document.visibilityState!=='visible' || !ME) return;
   if(document.getElementById('app').style.display==='none') return;
+  perbaruiBannerSakit(); // murah (tanpa jaringan): cek ulang banner walau data tidak ditarik ulang
   if(cacheMasihSegar()) return; // baru saja sync (<3 menit lalu), tidak perlu tarik ulang
   muatUlang();
 });
