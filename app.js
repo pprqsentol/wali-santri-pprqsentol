@@ -114,11 +114,23 @@ const CACHE_KEY = 'wali_cache_v2'; // cadangan tampilan terakhir saja (bukan sum
 const SYNC_TS_KEY = 'wali_last_sync_v2'; // kapan terakhir kali BERHASIL narik data lengkap dari Supabase -- juga dipakai sebagai "cursor" delta sync (updated_at >= ini)
 const FULL_SYNC_TS_KEY = 'wali_last_full_sync_v2'; // kapan terakhir kali sync PENUH (bukan delta) berhasil
 const MIN_SYNC_MS = 10 * 60 * 1000; // 10 menit -- jarak minimal antar sync (delta ataupun penuh); makin jarang sync, makin sedikit baris log & egress di Supabase
-const FULL_RESYNC_MS = 6 * 60 * 60 * 1000; // 6 jam -- jaring pengaman: delta sync (berdasar updated_at) tidak
-  // bisa tahu kalau ada baris yang betul-betul DIHAPUS (bukan diedit) di server, atau baris yang
-  // status-nya berubah sampai keluar dari filter (misal transaksi_saldo status aktif->dibatalkan).
-  // Supaya kasus itu tidak "nyangkut" selamanya di HP, tiap maksimal 6 jam dipaksa sync PENUH lagi
-  // (ganti total, bukan gabung) yang otomatis membuang baris yang sudah tidak relevan.
+const FULL_RESYNC_MS = 6 * 60 * 60 * 1000; // 6 jam -- SEKARANG hanya dipakai sebagai batas login ulang (pastikanSesiWali),
+  // supaya Kode Wali yang diganti admin tetap ketahuan. Jadwal sync PENUH sudah dipisah: lihat batasSinkronPenuhTs().
+const JAM_SINKRON_PENUH = 20; // WIB -- sync PENUH sekali per hari, pembukaan pertama setelah jam ini.
+  // Jaring pengaman: delta sync (berdasar updated_at) tidak bisa tahu kalau ada baris yang betul-betul
+  // DIHAPUS (bukan diedit) di server, atau baris yang status-nya berubah sampai keluar dari filter
+  // (misal transaksi_saldo status aktif->dibatalkan). Supaya kasus itu tidak "nyangkut" selamanya di HP,
+  // sekali sehari dipaksa sync PENUH (ganti total, bukan gabung) yang otomatis membuang baris yang tidak relevan.
+// Penanda waktu (ms) kemunculan jam 20.00 WIB terakhir (hari ini kalau sudah lewat jam 20.00, kalau belum
+// kemarin). Sync penuh dibutuhkan kalau sync penuh terakhir terjadi SEBELUM penanda ini => paling banyak
+// satu sync penuh per jendela 20.00-ke-20.00.
+function batasSinkronPenuhTs(sekarang){
+  sekarang = sekarang || new Date();
+  const tgl = new Intl.DateTimeFormat('en-CA', { timeZone:'Asia/Jakarta' }).format(sekarang);
+  const jam = Number(new Intl.DateTimeFormat('en-GB', { timeZone:'Asia/Jakarta', hour:'2-digit', hour12:false }).format(sekarang)) % 24;
+  const hariBatas = jam >= JAM_SINKRON_PENUH ? tgl : geserTanggalStr(tgl, { hari:-1 });
+  return new Date(`${hariBatas}T${String(JAM_SINKRON_PENUH).padStart(2,'0')}:00:00+07:00`).getTime();
+}
 function simpanCache(db){ try{ localStorage.setItem(CACHE_KEY, JSON.stringify(db)); localStorage.setItem(SYNC_TS_KEY, String(Date.now())); }catch(e){} }
 function ambilCache(){ try{ return JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); }catch(e){ return null; } }
 function cacheMasihSegar(){
@@ -301,6 +313,100 @@ async function pastikanSesiWali(noInduk, kodeWali){
   return error || null;
 }
 
+/* ---------- SATU PANGGILAN SERVER (hemat baris log Supabase) ----------
+   Fungsi database data_wali_sync (SECURITY INVOKER: RLS tetap berlaku, wali cuma melihat data anaknya)
+   mengembalikan SEMUA data wali dalam satu JSON, menggantikan 10-18 request REST per sinkron.
+   p_since = kursor delta (updated_at >= p_since) | p_full = sertakan data jarang berubah | p_cutoff = awal jendela 30 hari.
+   Kursor delta diambil dari 'waktu_server' (bukan jam HP) dikurangi tumpang tindih 2 menit.
+   Kalau fungsi belum dipasang / gagal -> null, dan muatDataWali jatuh ke cara lama (ambilPaketLegacy). */
+const CURSOR_KEY = 'wali_cursor_v3';
+const KURSOR_TUMPANG_MS = 2 * 60 * 1000;
+function ambilKursorIso(){
+  try{ const k = localStorage.getItem(CURSOR_KEY); if(k) return k; }catch(e){}
+  const t = waktuSyncTerakhirTs(); // sebelum ada kursor server: pakai waktu sync terakhir di HP
+  return t ? new Date(t - KURSOR_TUMPANG_MS).toISOString() : null;
+}
+function simpanKursor(waktuMs){ try{ localStorage.setItem(CURSOR_KEY, new Date(waktuMs - KURSOR_TUMPANG_MS).toISOString()); }catch(e){} }
+let rpcSyncTersedia = true; // jadi false kalau fungsi tidak ada di database, supaya tidak dicoba lagi tiap sinkron
+async function ambilPaketRpc({ perluFull, cursorIso, cutoffTgl }){
+  if(!rpcSyncTersedia) return null;
+  const { data, error } = await sb.rpc('data_wali_sync', { p_since: cursorIso, p_full: perluFull, p_cutoff: cutoffTgl });
+  if(error){
+    if(error.code === 'PGRST202' || error.code === '42883' || /could not find the function/i.test(error.message||'')){ rpcSyncTersedia = false; return null; }
+    if(!error.code && /fetch|network/i.test(error.message||'')) throw error; // offline: biar jatuh ke cadangan, jangan menembak query lain
+    return null;
+  }
+  if(!data || !data.santri) return null;
+  return {
+    s: data.santri, mahramRows: data.mahram, kegiatanRows: data.kegiatan, tesJuzRows: data.tes_kenaikan_juz,
+    absensiRows: data.absensi, hafalanRows: data.hafalan, murojaahRows: data.murojaah,
+    saldoRows: data.transaksi_saldo, tokoRows: data.transaksi_toko, tagihanRows: data.tagihan,
+    jenisTagihanRows: data.jenis_tagihan, iuranDetailRows: data.iuran_detail, saldoView: data.saldo,
+    rekapAbsensiRows: data.rekap_absensi, rekapHafalanRows: data.rekap_hafalan, rekapMurojaahRows: data.rekap_murojaah,
+    rekapSaldoRows: data.rekap_saldo, rekapTokoRows: data.rekap_toko,
+    waktuServer: Date.parse(data.waktu_server) || null
+  };
+}
+
+/* Cara LAMA (fallback): 10-18 query REST per sinkron. Dipakai kalau fungsi server data_wali_sync belum
+   dipasang di database atau gagal. Hasilnya dibentuk persis sama dengan ambilPaketRpc. */
+async function ambilPaketLegacy({ perluFull, cursorIso, cutoffTgl }){
+  // Data yang jarang berubah HANYA ditarik saat sync PENUH; di sync delta query-nya tidak dikirim
+  // (builder supabase-js baru jalan kalau di-await) dan hasil sync sebelumnya dipakai ulang dari basis.
+  const lambat = q => perluFull ? q : Promise.resolve({ data: null });
+  const { data: s, error: errSantri } = await sb.from('santri').select('id,nama,no_induk,foto_url,foto_thumb_url,tetala,alamat,tanggal_masuk,jenis_kelamin,nama_ayah,nama_ibu,nama_wali,foto_wali,foto_wali_thumb_url,kode_wali,kelas,kamar,no_hp_wali,program,hafalan_awal').single();
+  if(errSantri || !s) return null;
+  // 5 query volume terbesar (absensi/hafalan/murojaah/transaksi_saldo/transaksi_toko) dibuat
+  // sebagai builder dulu, baru ditambah filter updated_at KALAU ini sync delta -- supaya cuma
+  // baris yang baru dibuat/diedit sejak sync terakhir yang ditarik, bukan seluruh isi tabel lagi.
+  let qAbsensi = sb.from('absensi').select('id,santri_id,kegiatan_id,tanggal,status').eq('santri_id', s.id).gte('tanggal', cutoffTgl);
+  let qHafalan = sb.from('hafalan').select('id,santri_id,tanggal,juz,halaman_sampai,kegiatan_id,keterangan').eq('santri_id', s.id).gte('tanggal', cutoffTgl).order('tanggal');
+  let qMurojaah = sb.from('murojaah').select('id,santri_id,kegiatan_id,tanggal,juz,cakupan,keterangan').eq('santri_id', s.id).gte('tanggal', cutoffTgl).order('tanggal');
+  let qSaldo = sb.from('transaksi_saldo').select('id,santri_id,jenis,jumlah,keterangan,tanggal,metode').eq('santri_id', s.id).eq('status', 'aktif').gte('tanggal', cutoffTgl);
+  // items_ringkas = generated column di Supabase, cuma berisi {nama_produk,qty} per barang
+  // (bukan produk_id/harga_beli/harga_jual yang tidak pernah dipakai di app ini)
+  let qToko = sb.from('transaksi_toko').select('id,santri_id,items:items_ringkas,total,metode,status_bayar,created_at').eq('santri_id', s.id).gte('created_at', cutoffTgl);
+  if(cursorIso){
+    qAbsensi = qAbsensi.gte('updated_at', cursorIso);
+    qHafalan = qHafalan.gte('updated_at', cursorIso);
+    qMurojaah = qMurojaah.gte('updated_at', cursorIso);
+    qSaldo = qSaldo.gte('updated_at', cursorIso);
+    qToko = qToko.gte('updated_at', cursorIso);
+  }
+
+  const [
+    { data: mahramRows }, { data: kegiatanRows }, { data: tesJuzRows }, { data: absensiRows },
+    { data: hafalanRows }, { data: murojaahRows }, { data: saldoRows }, { data: tokoRows },
+    { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows },
+    { data: saldoView },
+    { data: rekapAbsensiRows }, { data: rekapHafalanRows }, { data: rekapMurojaahRows },
+    { data: rekapSaldoRows }, { data: rekapTokoRows }
+  ] = await Promise.all([
+    lambat(sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url,foto_thumb_url').eq('santri_id', s.id)),
+    lambat(sb.from('kegiatan').select('id,nama,program_khusus').eq('aktif', true)),
+    // Tes Kenaikan Juz -- barisnya sedikit (hanya tiap juz/blok 10 juz tuntas), jadi
+    // ditarik PENUH tiap loadAll() (bukan didelta), supaya notice "tes 10 juz, wali harus
+    // ke pondok" selalu muncul akurat begitu pembina mencatatnya.
+    sb.from('tes_kenaikan_juz').select('id,santri_id,juz_selesai,kategori,syarat_juz,tanggal_mulai,batas_hari,status,tanggal_lulus,wali_hadir').eq('santri_id', s.id),
+    qAbsensi, qHafalan, qMurojaah, qSaldo, qToko,
+    sb.from('tagihan').select('id,santri_id,jenis_tagihan_id,bulan,jumlah,status,tgl_bayar').eq('santri_id', s.id),
+    lambat(sb.from('jenis_tagihan').select('id,nama')),
+    sb.from('iuran_detail').select('id, santri_id, jumlah, status, tgl_bayar, iuran(tanggal, keterangan)').eq('santri_id', s.id),
+    // Saldo SEKARANG dihitung server-side (view saldo_santri, sama seperti dipakai Aplikasi
+    // Toko/Kasir) -- bukan lagi dijumlah dari transaksi_saldo di JS, karena transaksi_saldo
+    // yang ditarik sekarang cuma 30 hari terakhir (tidak cukup buat hitung total saldo).
+    sb.from('saldo_santri').select('saldo').eq('santri_id', s.id).maybeSingle(),
+    lambat(sb.from('rekap_absensi_bulanan').select('bulan,hadir,izin,sakit,alpha,total').eq('santri_id', s.id).order('bulan', { ascending: false })),
+    lambat(sb.from('rekap_hafalan_bulanan').select('bulan,jumlah_setoran,juz_akhir,halaman_akhir').eq('santri_id', s.id).order('bulan', { ascending: false })),
+    lambat(sb.from('rekap_murojaah_bulanan').select('bulan,jumlah_setoran,juz_terakhir').eq('santri_id', s.id).order('bulan', { ascending: false })),
+    lambat(sb.from('rekap_saldo_bulanan').select('bulan,jenis,jumlah_transaksi,total_nominal').eq('santri_id', s.id).order('bulan', { ascending: false })),
+    lambat(sb.from('rekap_toko_bulanan').select('bulan,jumlah_transaksi,total_belanja').eq('santri_id', s.id).order('bulan', { ascending: false }))
+  ]);
+  return { s, mahramRows, kegiatanRows, tesJuzRows, absensiRows, hafalanRows, murojaahRows, saldoRows, tokoRows,
+    tagihanRows, jenisTagihanRows, iuranDetailRows, saldoView, rekapAbsensiRows, rekapHafalanRows,
+    rekapMurojaahRows, rekapSaldoRows, rekapTokoRows, waktuServer: null };
+}
+
 async function muatDataWali(noInduk, kodeWali, izinkanCache){
   try{
     const authError = await pastikanSesiWali(noInduk, kodeWali);
@@ -309,11 +415,6 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       return false;
     }
 
-    const { data: s, error: errSantri } = await sb.from('santri').select('id,nama,no_induk,foto_url,foto_thumb_url,tetala,alamat,tanggal_masuk,jenis_kelamin,nama_ayah,nama_ibu,nama_wali,foto_wali,foto_wali_thumb_url,kode_wali,kelas,kamar,no_hp_wali,program,hafalan_awal').single();
-    if(errSantri || !s){
-      if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
-      return false;
-    }
 
     // 'murojaah' (mengulang hafalan) TETAP diambil -- yang dihapus dulu cuma
     // nama "Setoran 2" di tampilan, bukan datanya. Datanya mencakup semua
@@ -331,65 +432,27 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
     // basis = data lokal yang sudah ada (dari cache tersimpan, atau dari DB di memori kalau
     // baru saja sync di sesi ini) -- dipakai sebagai dasar gabungan kalau sync ini DELTA.
     const basis = ambilCache() || DB;
-    const cursorTs = waktuSyncTerakhirTs();
     // Cadangan lama (sebelum ada field 'st' di absensi) dipaksa sync PENUH sekali, supaya banner
     // "anak sakit" tidak salah hitung gara-gara baris lama yang belum punya status asli.
     const cacheAbsensiLama = (basis.absensi||[]).some(a=>a.st===undefined);
     const cacheKosong = !(basis.santri && basis.santri.length); // tanda waktu sync ada tapi isi cadangan hilang -> tidak bisa delta
-    const perluFull = cacheKosong || cacheAbsensiLama || !waktuFullSyncTerakhirTs() || (Date.now() - waktuFullSyncTerakhirTs() > FULL_RESYNC_MS);
-    // Data yang jarang berubah (mahram, kegiatan, jenis tagihan, 5 rekap bulanan) HANYA ditarik saat
-    // sync PENUH (maks. tiap 6 jam). Di sync delta, query-nya tidak dikirim sama sekali (builder
-    // supabase-js baru jalan kalau di-await) dan hasil sync sebelumnya dipakai ulang dari 'basis'.
-    // Ini memangkas 8 dari 17 request per sinkron => baris log & egress jauh lebih sedikit.
-    const lambat = q => perluFull ? q : Promise.resolve({ data: null });
-    const cursorIso = (!perluFull && cursorTs) ? new Date(cursorTs).toISOString() : null;
+    // Sync PENUH sekali per hari: pembukaan pertama SETELAH jam 20.00 WIB (saat absensi hari itu sudah
+    // lengkap, lihat batasSinkronPenuhTs). Pembukaan lain di antaranya cukup sync delta.
+    const perluFull = cacheKosong || cacheAbsensiLama || !waktuFullSyncTerakhirTs() || (waktuFullSyncTerakhirTs() < batasSinkronPenuhTs());
+    // Data yang jarang berubah (mahram, kegiatan, jenis tagihan, 5 rekap bulanan) HANYA diminta saat sync PENUH
+    // (sekali sehari, setelah jam 20.00 WIB); di sync delta hasil sebelumnya dipakai ulang dari 'basis'.
+    // Seluruh data diambil lewat SATU panggilan server (ambilPaketRpc); cara lama (ambilPaketLegacy) hanya cadangan.
+    const cursorIso = perluFull ? null : ambilKursorIso();
 
-    // 5 query volume terbesar (absensi/hafalan/murojaah/transaksi_saldo/transaksi_toko) dibuat
-    // sebagai builder dulu, baru ditambah filter updated_at KALAU ini sync delta -- supaya cuma
-    // baris yang baru dibuat/diedit sejak sync terakhir yang ditarik, bukan seluruh isi tabel lagi.
-    let qAbsensi = sb.from('absensi').select('id,santri_id,kegiatan_id,tanggal,status').eq('santri_id', s.id).gte('tanggal', cutoffTgl);
-    let qHafalan = sb.from('hafalan').select('id,santri_id,tanggal,juz,halaman_sampai,kegiatan_id,keterangan').eq('santri_id', s.id).gte('tanggal', cutoffTgl).order('tanggal');
-    let qMurojaah = sb.from('murojaah').select('id,santri_id,kegiatan_id,tanggal,juz,cakupan,keterangan').eq('santri_id', s.id).gte('tanggal', cutoffTgl).order('tanggal');
-    let qSaldo = sb.from('transaksi_saldo').select('id,santri_id,jenis,jumlah,keterangan,tanggal,metode').eq('santri_id', s.id).eq('status', 'aktif').gte('tanggal', cutoffTgl);
-    // items_ringkas = generated column di Supabase, cuma berisi {nama_produk,qty} per barang
-    // (bukan produk_id/harga_beli/harga_jual yang tidak pernah dipakai di app ini)
-    let qToko = sb.from('transaksi_toko').select('id,santri_id,items:items_ringkas,total,metode,status_bayar,created_at').eq('santri_id', s.id).gte('created_at', cutoffTgl);
-    if(cursorIso){
-      qAbsensi = qAbsensi.gte('updated_at', cursorIso);
-      qHafalan = qHafalan.gte('updated_at', cursorIso);
-      qMurojaah = qMurojaah.gte('updated_at', cursorIso);
-      qSaldo = qSaldo.gte('updated_at', cursorIso);
-      qToko = qToko.gte('updated_at', cursorIso);
+    let paket = await ambilPaketRpc({ perluFull, cursorIso, cutoffTgl });
+    if(!paket) paket = await ambilPaketLegacy({ perluFull, cursorIso, cutoffTgl });
+    if(!paket){
+      if(izinkanCache){ const c = ambilCache(); if(c){ DB = c; enterApp(); return true; } }
+      return false;
     }
-
-    const [
-      { data: mahramRows }, { data: kegiatanRows }, { data: tesJuzRows }, { data: absensiRows },
-      { data: hafalanRows }, { data: murojaahRows }, { data: saldoRows }, { data: tokoRows },
-      { data: tagihanRows }, { data: jenisTagihanRows }, { data: iuranDetailRows },
-      { data: saldoView },
-      { data: rekapAbsensiRows }, { data: rekapHafalanRows }, { data: rekapMurojaahRows },
-      { data: rekapSaldoRows }, { data: rekapTokoRows }
-    ] = await Promise.all([
-      lambat(sb.from('mahram').select('id,nama,hubungan,no_hp,foto_url,foto_thumb_url').eq('santri_id', s.id)),
-      lambat(sb.from('kegiatan').select('id,nama,program_khusus').eq('aktif', true)),
-      // Tes Kenaikan Juz -- barisnya sedikit (hanya tiap juz/blok 10 juz tuntas), jadi
-      // ditarik PENUH tiap loadAll() (bukan didelta), supaya notice "tes 10 juz, wali harus
-      // ke pondok" selalu muncul akurat begitu pembina mencatatnya.
-      sb.from('tes_kenaikan_juz').select('id,santri_id,juz_selesai,kategori,syarat_juz,tanggal_mulai,batas_hari,status,tanggal_lulus,wali_hadir').eq('santri_id', s.id),
-      qAbsensi, qHafalan, qMurojaah, qSaldo, qToko,
-      sb.from('tagihan').select('id,santri_id,jenis_tagihan_id,bulan,jumlah,status,tgl_bayar').eq('santri_id', s.id),
-      lambat(sb.from('jenis_tagihan').select('id,nama')),
-      sb.from('iuran_detail').select('id, santri_id, jumlah, status, tgl_bayar, iuran(tanggal, keterangan)').eq('santri_id', s.id),
-      // Saldo SEKARANG dihitung server-side (view saldo_santri, sama seperti dipakai Aplikasi
-      // Toko/Kasir) -- bukan lagi dijumlah dari transaksi_saldo di JS, karena transaksi_saldo
-      // yang ditarik sekarang cuma 30 hari terakhir (tidak cukup buat hitung total saldo).
-      sb.from('saldo_santri').select('saldo').eq('santri_id', s.id).maybeSingle(),
-      lambat(sb.from('rekap_absensi_bulanan').select('bulan,hadir,izin,sakit,alpha,total').eq('santri_id', s.id).order('bulan', { ascending: false })),
-      lambat(sb.from('rekap_hafalan_bulanan').select('bulan,jumlah_setoran,juz_akhir,halaman_akhir').eq('santri_id', s.id).order('bulan', { ascending: false })),
-      lambat(sb.from('rekap_murojaah_bulanan').select('bulan,jumlah_setoran,juz_terakhir').eq('santri_id', s.id).order('bulan', { ascending: false })),
-      lambat(sb.from('rekap_saldo_bulanan').select('bulan,jenis,jumlah_transaksi,total_nominal').eq('santri_id', s.id).order('bulan', { ascending: false })),
-      lambat(sb.from('rekap_toko_bulanan').select('bulan,jumlah_transaksi,total_belanja').eq('santri_id', s.id).order('bulan', { ascending: false }))
-    ]);
+    const { s, mahramRows, kegiatanRows, tesJuzRows, absensiRows, hafalanRows, murojaahRows, saldoRows, tokoRows,
+      tagihanRows, jenisTagihanRows, iuranDetailRows, saldoView, rekapAbsensiRows, rekapHafalanRows,
+      rekapMurojaahRows, rekapSaldoRows, rekapTokoRows, waktuServer } = paket;
 
     // Bentuk ulang jadi persis nama field yang dipakai di seluruh app.js ini
     // (sebelumnya dibentuk oleh RPC data_wali_santri di sisi server; sekarang dibentuk di sini).
@@ -479,6 +542,7 @@ async function muatDataWali(noInduk, kodeWali, izinkanCache){
       return sum;
     }, 0);
     simpanCache(DB);
+    simpanKursor(waktuServer || Date.now()); // kursor delta berikutnya (jam server kalau lewat RPC, jam HP kalau cara lama)
     if(perluFull) catatFullSync();
     enterApp();
     return true;
@@ -622,7 +686,9 @@ async function tutupScanner(){
 }
 
 async function logout(){
-  await sb.auth.signOut();
+  // scope 'local': keluar dari perangkat INI saja. Default supabase-js ('global') mencabut SEMUA sesi akun itu,
+  // jadi wali yang keluar di satu HP memutus HP lain (mis. ayah & ibu pakai akun yang sama) dan memicu login ulang.
+  try{ await sb.auth.signOut({ scope: 'local' }); }catch(e){}
   sessionStorage.removeItem('wali_session');
   sessionStorage.removeItem('wali_login_ts');
   ME = null;
